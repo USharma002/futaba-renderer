@@ -14,24 +14,23 @@ Futaba is a high-performance, learning-oriented physically-based renderer writte
 ## Features
 
 ### Current Implementation
-- **GPU Acceleration**: Entire rendering pipeline implemented in **CUDA** for massive parallelism. Incorporates **NVIDIA OptiX** for hardware-accelerated ray-geometry intersections alongside a highly optimized software BVH fallback.
+- **GPU Acceleration**: CUDA-based pipeline with NVIDIA OptiX hardware acceleration and an optimized software BVH fallback.
 - **Interactive UI**: Real-time viewport driven by NanoGUI featuring:
   ![Interactive UI](assets/futaba-window.png)
-  - Robust WASD navigation utilizing quaternion-style relative axis-angle rotations, fully supporting arbitrary scene 'up' vectors without gimbal lock.
-  - Dynamic GPU state toggles for **Anti-aliasing** (subpixel stochastic jittering) and **Smooth Shading** (interpolated vertex normals vs. flat face normals).
-  - An orientation gizmo and interactive FOV/depth sliders that instantly trigger accumulation buffer resets.
+  - Smooth WASD navigation with gimbal-lock-free quaternion rotations.
+  - GPU toggles for Anti-aliasing and Smooth Shading.
+  - Interactive FOV and depth sliders with real-time accumulation reset.
 - **Scene Parsing**: 
-  - Comprehensive custom XML loader mirroring the Mitsuba architecture.
-  - Deep support for composite `<transform>` hierarchies (`scale`, `rotate`, `translate`).
-  - Advanced OBJ parsing supporting `v/vt/vn` indices and pre-transforming geometric normals.
+  - Loading logic based on the **Nori** renderer, with an overall structure based on a **Mitsuba hybrid** approach.
+  - XML loader supporting nested `<transform>` blocks and advanced OBJ parsing.
 - **Integrators**: 
   - **Path Tracing**: Full Monte Carlo integration with Russian Roulette.
     ![Path Tracing](assets/dragon-cbox.png)
-  - **Normals**: Surface normal visualization for debugging smoothing groups and face orientations.
+  - **Normals**: Surface normal visualization for debugging.
     ![Surface Normals](assets/dragon-cbox-normals.png)
-  - **Heatmap**: Visualization of AABB intersection complexity, normalized to a dynamic color scale.
+  - **Heatmap**: AABB intersection complexity visualization.
     ![Intersection Heatmap](assets/dragon-cbox-heatmap.png)
-- **Films**: 32-bit HDR accumulation mapped directly to zero-copy OpenGL PBOs with **EXR** export support.
+- **Films**: 32-bit HDR accumulation with zero-copy OpenGL PBO display and EXR export support.
 
 ### Planned Features
 - **Advanced Path Guiding**: Learn and adapt to scene-specific light transport patterns.
