@@ -26,6 +26,7 @@ Futaba is a high-performance, learning-oriented physically-based renderer writte
   - Advanced OBJ parsing supporting `v/vt/vn` indices and pre-transforming geometric normals.
 - **Integrators**: 
   - **Path Tracing**: Full Monte Carlo integration with Russian Roulette.
+    ![Path Tracing](assets/dragon-cbox.png)
   - **Normals**: Surface normal visualization for debugging smoothing groups and face orientations.
     ![Surface Normals](assets/dragon-cbox-normals.png)
   - **Heatmap**: Visualization of AABB intersection complexity, normalized to a dynamic color scale.
