@@ -16,6 +16,7 @@ Futaba is a high-performance, learning-oriented physically-based renderer writte
 ### Current Implementation
 - **GPU Acceleration**: Entire rendering pipeline implemented in **CUDA** for massive parallelism. Incorporates **NVIDIA OptiX** for hardware-accelerated ray-geometry intersections alongside a highly optimized software BVH fallback.
 - **Interactive UI**: Real-time viewport driven by NanoGUI featuring:
+  ![Interactive UI](assets/futaba-window.png)
   - Robust WASD navigation utilizing quaternion-style relative axis-angle rotations, fully supporting arbitrary scene 'up' vectors without gimbal lock.
   - Dynamic GPU state toggles for **Anti-aliasing** (subpixel stochastic jittering) and **Smooth Shading** (interpolated vertex normals vs. flat face normals).
   - An orientation gizmo and interactive FOV/depth sliders that instantly trigger accumulation buffer resets.
@@ -26,7 +27,9 @@ Futaba is a high-performance, learning-oriented physically-based renderer writte
 - **Integrators**: 
   - **Path Tracing**: Full Monte Carlo integration with Russian Roulette.
   - **Normals**: Surface normal visualization for debugging smoothing groups and face orientations.
+    ![Surface Normals](assets/dragon-cbox-normals.png)
   - **Heatmap**: Visualization of AABB intersection complexity, normalized to a dynamic color scale.
+    ![Intersection Heatmap](assets/dragon-cbox-heatmap.png)
 - **Films**: 32-bit HDR accumulation mapped directly to zero-copy OpenGL PBOs with **EXR** export support.
 
 ### Planned Features
