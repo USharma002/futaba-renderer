@@ -47,6 +47,123 @@ Futaba is a high-performance, learning-oriented physically-based renderer writte
 4. **BSDF**: Evaluates physically-based material properties and samples indirect lighting paths.
 5. **Film**: Accumulates floating-point samples directly into mapped OpenGL Pixel Buffer Objects (PBOs) for zero-copy, real-time screen display, while supporting CPU-side extraction for EXR archival.
 
+
+```mermaid
+
+flowchart TD
+
+  
+
+%% Styling
+
+classDef cpu fill:#e3f2fd,stroke:#1565c0,stroke-width:2px,color:#000;
+
+classDef gpu fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px,color:#000;
+
+classDef data fill:#fff3e0,stroke:#e65100,stroke-width:2px,color:#000;
+
+  
+
+%% Nodes
+
+main[main.cpp]:::cpu
+
+FS[FutabaScreen]:::cpu
+
+SL[SceneLoader]:::cpu
+
+LS[LoadedScene CPU]:::data
+
+RH[RendererHost]:::cpu
+
+  
+
+OPTIX[OptixPipeline]:::cpu
+
+KERNEL[CUDA Render Kernel]:::gpu
+
+SGPU[Scene GPU]:::gpu
+
+  
+
+SAMP[Sampler]:::gpu
+
+CAM[PerspectiveCamera]:::gpu
+
+INTG[Integrator]:::gpu
+
+FILM[HDRFilm]:::data
+
+  
+
+BVH[BVH / Nodes]:::data
+
+TRIS[Geometry]:::data
+
+MATS[Materials]:::data
+
+EMITS[Emitters]:::data
+
+  
+
+%% CPU / App Flow
+
+main --> FS
+
+FS -->|Loads XML| SL
+
+SL -->|Builds| LS
+
+LS -->|Passes to| RH
+
+FS -->|Drives| RH
+
+  
+
+%% CPU to GPU Boundary
+
+RH -->|Configures| OPTIX
+
+RH -->|Allocates| SGPU
+
+RH -->|Dispatches| KERNEL
+
+  
+
+%% GPU Data Structure
+
+SGPU --> BVH
+
+SGPU --> TRIS
+
+SGPU --> MATS
+
+SGPU --> EMITS
+
+  
+
+%% GPU Execution
+
+KERNEL --> SAMP
+
+KERNEL --> CAM
+
+KERNEL --> INTG
+
+  
+
+INTG -->|Query & Shade| SGPU
+
+  
+
+%% Output
+
+KERNEL -->|Accumulate| FILM
+
+FILM -.->|Display Texture| FS
+
+```
+
 ## Building and Running
 
 ### Prerequisites

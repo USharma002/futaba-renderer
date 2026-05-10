@@ -1,6 +1,7 @@
 #include "scene_loader.h"
 #include "proplist.h"
 #include "material_builders.h"
+#include "emitter_builders.h"
 #include "triangle.cuh"
 #include "material.cuh"
 
@@ -10,20 +11,21 @@
 #include <stdexcept>
 #include <filesystem>
 #include <functional>
+#include <cmath>
 
 namespace fs = std::filesystem;
 
 namespace futaba {
 
 // ---------------------------------------------------------------------------
-// Helpers
+// Internal helpers
 // ---------------------------------------------------------------------------
 
 static float toF(const std::string& s) { return std::stof(s); }
 
 static void fillPropertyList(const pugi::xml_node& node,
                              PropertyList& plist,
-                             const std::function<::Vector3f(const std::string&)>& parseVec3Fn)
+                             const std::function<Vector3f(const std::string&)>& parseVec3Fn)
 {
     for (const pugi::xml_node& child : node.children()) {
         const std::string tag      = child.name();
@@ -37,22 +39,21 @@ static void fillPropertyList(const pugi::xml_node& node,
         else if (tag == "float")   { plist.setFloat  (propName, toF(propVal)); }
         else if (tag == "string")  { plist.setString (propName, propVal); }
         else if (tag == "color" || tag == "rgb" || tag == "spectrum") {
-            // Mitsuba uses <rgb>, some loaders use <color>; treat both identically.
-            ::Vector3f c = parseVec3Fn(propVal);
-            plist.setColor(propName, ::Color3f(c.x, c.y, c.z));
+            Vector3f c = parseVec3Fn(propVal);
+            plist.setColor(propName, Color3f(c.x, c.y, c.z));
         }
         else if (tag == "point") {
-            ::Vector3f p = parseVec3Fn(propVal);
-            plist.setPoint(propName, ::Point3f(p.x, p.y, p.z));
+            Vector3f p = parseVec3Fn(propVal);
+            plist.setPoint(propName, Point3f(p.x, p.y, p.z));
         }
         else if (tag == "vector") {
-            ::Vector3f v = parseVec3Fn(propVal);
-            plist.setVector(propName, ::Vector3f(v.x, v.y, v.z));
+            Vector3f v = parseVec3Fn(propVal);
+            plist.setVector(propName, Vector3f(v.x, v.y, v.z));
         }
     }
 }
 
-::Vector3f SceneLoader::parseVec3(const std::string& s) {
+Vector3f SceneLoader::parseVec3(const std::string& s) {
     std::string tmp = s;
     for (char& c : tmp) if (c == ',') c = ' ';
     std::istringstream ss(tmp);
@@ -63,12 +64,15 @@ static void fillPropertyList(const pugi::xml_node& node,
 }
 
 // ---------------------------------------------------------------------------
-// OBJ mesh loader (v + f only, fan-triangulation)
+// OBJ mesh loader (v / vn / f, fan-triangulation)
 // ---------------------------------------------------------------------------
 bool SceneLoader::parseMesh(const std::string& baseDir,
                              const std::string& objFilename,
+                             const std::string& meshName,
                              int                materialId,
+                             int                emitterId,
                              const Matrix4f&    transform,
+                             const Matrix4f&    normalTransform,
                              LoadedScene&       out,
                              std::string&       errorOut)
 {
@@ -79,10 +83,18 @@ bool SceneLoader::parseMesh(const std::string& baseDir,
         return false;
     }
 
-    std::vector<::Point3f> verts;
-    std::vector<::Vector3f> norms;
-    std::string line;
+    std::vector<Point3f>  verts;
+    std::vector<Vector3f> norms;
 
+    const uint32_t meshTriangleStart = (uint32_t)out.triangles.size();
+    const int      meshId            = (int)out.meshes.size();
+
+    // Hoist face-index buffers outside the parsing loop to avoid
+    // per-face heap allocation on large meshes.
+    std::vector<int> v_indices;
+    std::vector<int> n_indices;
+
+    std::string line;
     while (std::getline(file, line)) {
         if (line.empty() || line[0] == '#') continue;
 
@@ -93,30 +105,40 @@ bool SceneLoader::parseMesh(const std::string& baseDir,
         if (token == "v") {
             float x, y, z;
             ss >> x >> y >> z;
-            ::Point3f p(x, y, z);
-            p = transform * p;
+            Point3f p(x, y, z);
+            p = transform * p;          // bake world transform at load time
             verts.push_back(p);
         }
         else if (token == "vn") {
             float nx, ny, nz;
             ss >> nx >> ny >> nz;
-            ::Vector3f n(nx, ny, nz);
-            n = normalize(transform * n);
+            Vector3f n(nx, ny, nz);
+            // Normals must use the inverse-transpose of the upper-left 3×3
+            // of the transform so they remain perpendicular to the surface
+            // under non-uniform scaling.  normalTransform encodes exactly
+            // that matrix (built in the caller for the supported ops).
+            n = normalize(normalTransform * n);
             norms.push_back(n);
         }
         else if (token == "f") {
-            std::vector<int> v_indices;
-            std::vector<int> n_indices;
+            v_indices.clear();
+            n_indices.clear();
+
             std::string part;
             while (ss >> part) {
                 int v_idx = std::stoi(part);
+                // OBJ uses 1-based indices; negative values are relative to
+                // the end of the current vertex list.
                 if (v_idx < 0) v_idx = (int)verts.size() + v_idx + 1;
                 v_indices.push_back(v_idx - 1);
 
-                auto first_slash = part.find('/');
+                // Parse optional normal index from v[/vt[/vn]] syntax.
+                const auto first_slash  = part.find('/');
                 if (first_slash != std::string::npos) {
-                    auto second_slash = part.find('/', first_slash + 1);
-                    if (second_slash != std::string::npos && second_slash + 1 < part.length()) {
+                    const auto second_slash = part.find('/', first_slash + 1);
+                    if (second_slash != std::string::npos &&
+                        second_slash + 1 < part.size())
+                    {
                         int n_idx = std::stoi(part.substr(second_slash + 1));
                         if (n_idx < 0) n_idx = (int)norms.size() + n_idx + 1;
                         n_indices.push_back(n_idx - 1);
@@ -127,23 +149,31 @@ bool SceneLoader::parseMesh(const std::string& baseDir,
                     n_indices.push_back(-1);
                 }
             }
-            
+
+            // Fan-triangulate polygons.
             for (int i = 1; i + 1 < (int)v_indices.size(); ++i) {
-                int i0 = v_indices[0], i1 = v_indices[i], i2 = v_indices[i + 1];
+                const int i0 = v_indices[0], i1 = v_indices[i], i2 = v_indices[i + 1];
                 if (i0 < 0 || i1 < 0 || i2 < 0 ||
-                    i0 >= (int)verts.size() || i1 >= (int)verts.size() || i2 >= (int)verts.size())
+                    i0 >= (int)verts.size() ||
+                    i1 >= (int)verts.size() ||
+                    i2 >= (int)verts.size())
                 {
                     errorOut = "OBJ face index out of range in " + objPath.string();
                     return false;
                 }
+
                 Triangle tri;
                 tri.p0 = verts[i0];
                 tri.p1 = verts[i1];
                 tri.p2 = verts[i2];
-                
-                if (n_indices.size() == v_indices.size() &&
-                    n_indices[0] >= 0 && n_indices[i] >= 0 && n_indices[i+1] >= 0 &&
-                    n_indices[0] < (int)norms.size() && n_indices[i] < (int)norms.size() && n_indices[i+1] < (int)norms.size()) {
+
+                // Use per-vertex normals when all three are valid.
+                if ((int)n_indices.size() == (int)v_indices.size() &&
+                    n_indices[0]   >= 0 && n_indices[i]   >= 0 && n_indices[i+1] >= 0 &&
+                    n_indices[0]   < (int)norms.size() &&
+                    n_indices[i]   < (int)norms.size() &&
+                    n_indices[i+1] < (int)norms.size())
+                {
                     tri.n0 = norms[n_indices[0]];
                     tri.n1 = norms[n_indices[i]];
                     tri.n2 = norms[n_indices[i+1]];
@@ -151,18 +181,45 @@ bool SceneLoader::parseMesh(const std::string& baseDir,
                 } else {
                     tri.has_normals = false;
                 }
-                
+
                 tri.material_id = materialId;
+                tri.mesh_id     = meshId;
                 out.triangles.push_back(tri);
             }
         }
-        // vt, mtllib, usemtl, s, o, g — ignored
+        // vt, mtllib, usemtl, s, o, g - ignored for now (UV support pending)
     }
 
     if (verts.empty()) {
         errorOut = "OBJ file has no vertices: " + objPath.string();
         return false;
     }
+
+    // Build the MeshInstance record.
+    const uint32_t meshTriangleCount = (uint32_t)out.triangles.size() - meshTriangleStart;
+
+    MeshInstance meshInst;
+    meshInst.name          = meshName;
+    meshInst.materialId    = materialId;
+    meshInst.triangleStart = meshTriangleStart;
+    meshInst.triangleCount = meshTriangleCount;
+    meshInst.transform     = transform;
+    meshInst.emitterType   = (emitterId >= 0) ? EmitterType::Area : EmitterType::None;
+    meshInst.emitterId     = emitterId;
+
+    // Compute world-space AABB from the (already-transformed) vertex list.
+    meshInst.boundingBoxMin = verts[0];
+    meshInst.boundingBoxMax = verts[0];
+    for (const auto& v : verts) {
+        meshInst.boundingBoxMin.x = std::min(meshInst.boundingBoxMin.x, v.x);
+        meshInst.boundingBoxMin.y = std::min(meshInst.boundingBoxMin.y, v.y);
+        meshInst.boundingBoxMin.z = std::min(meshInst.boundingBoxMin.z, v.z);
+        meshInst.boundingBoxMax.x = std::max(meshInst.boundingBoxMax.x, v.x);
+        meshInst.boundingBoxMax.y = std::max(meshInst.boundingBoxMax.y, v.y);
+        meshInst.boundingBoxMax.z = std::max(meshInst.boundingBoxMax.z, v.z);
+    }
+
+    out.meshes.push_back(meshInst);
     return true;
 }
 
@@ -176,12 +233,12 @@ bool SceneLoader::parseCamera(const std::string& originStr,
                                LoadedScene&       out,
                                std::string&       /*errorOut*/)
 {
-    ::Vector3f o = parseVec3(originStr);
-    ::Vector3f t = parseVec3(targetStr);
-    ::Vector3f u = parseVec3(upStr);
+    const Vector3f o = parseVec3(originStr);
+    const Vector3f t = parseVec3(targetStr);
+    const Vector3f u = parseVec3(upStr);
 
-    out.camOrigin = ::Point3f(o.x, o.y, o.z);
-    out.camTarget = ::Point3f(t.x, t.y, t.z);
+    out.camOrigin = Point3f(o.x, o.y, o.z);
+    out.camTarget = Point3f(t.x, t.y, t.z);
     out.camUp     = u;
     out.camFov    = fov;
     out.hasCamera = true;
@@ -204,7 +261,7 @@ bool SceneLoader::load(const std::string& xmlPath,
         return false;
     }
 
-    pugi::xml_node root = doc.child("scene");
+    const pugi::xml_node root = doc.child("scene");
     if (!root) {
         errorOut = "Root element is not <scene>";
         return false;
@@ -215,9 +272,12 @@ bool SceneLoader::load(const std::string& xmlPath,
 
     int nextMatId = 0;
 
-    for (pugi::xml_node node : root.children()) {
+    for (const pugi::xml_node& node : root.children()) {
         const std::string name = node.name();
 
+        // ----------------------------------------------------------------
+        // <mesh>
+        // ----------------------------------------------------------------
         if (name == "mesh") {
             try {
                 PropertyList meshProps;
@@ -226,40 +286,79 @@ bool SceneLoader::load(const std::string& xmlPath,
 
                 const std::string objFile = meshProps.getString("filename");
 
+                std::string meshName = node.attribute("id").value();
+                if (meshName.empty()) {
+                    meshName = fs::path(objFile).stem().string();
+                    if (meshName.empty())
+                        meshName = "mesh_" + std::to_string(nextMatId);
+                }
+
                 PropertyList bsdfProps, emitterProps;
-                Matrix4f meshTransform; // Identity by default
+                int emitterId = -1;
+
+                // Start with identity transforms.
+                Matrix4f meshTransform;    // forward transform (for positions)
+                Matrix4f normalTransform;  // inverse-transpose (for normals)
 
                 for (const pugi::xml_node& child : node.children()) {
                     const std::string cn = child.name();
+
                     if (cn == "bsdf") {
                         const char* typeAttr = child.attribute("type").value();
-                        if (typeAttr && std::string(typeAttr).length() > 0)
+                        if (typeAttr && typeAttr[0] != '\0')
                             bsdfProps.setString("type", typeAttr);
                         fillPropertyList(child, bsdfProps,
                             [this](const std::string& s) { return this->parseVec3(s); });
-                    } else if (cn == "emitter") {
+                    }
+                    else if (cn == "emitter") {
+                        const std::string emitterType = child.attribute("type").value();
                         fillPropertyList(child, emitterProps,
                             [this](const std::string& s) { return this->parseVec3(s); });
-                    } else if (cn == "transform") {
+
+                        EmitterInstance inst = makeEmitterFromPropertyLists(
+                            emitterType, emitterProps, out.warnings);
+                        if (inst.type != EmitterType::None) {
+                            emitterId = (int)out.emitters.size();
+                            out.emitters.push_back(inst);
+                        }
+                    }
+                    else if (cn == "transform") {
                         for (const pugi::xml_node& tchild : child.children()) {
-                            std::string tname = tchild.name();
+                            const std::string tname = tchild.name();
+
                             if (tname == "translate") {
-                                Vector3f t = this->parseVec3(tchild.attribute("value").value());
+                                const Vector3f t = parseVec3(tchild.attribute("value").value());
                                 meshTransform = Matrix4f::translate(t) * meshTransform;
-                            } else if (tname == "scale") {
-                                Vector3f s = this->parseVec3(tchild.attribute("value").value());
+                                // Translations do not affect normals - normalTransform unchanged.
+                            }
+                            else if (tname == "scale") {
+                                const Vector3f s = parseVec3(tchild.attribute("value").value());
                                 meshTransform = Matrix4f::scale(s) * meshTransform;
-                            } else if (tname == "rotate") {
-                                Vector3f axis = this->parseVec3(tchild.attribute("axis").value());
-                                float angle = toF(tchild.attribute("angle").value());
-                                meshTransform = Matrix4f::rotate(axis, angle) * meshTransform;
+                                // Normal scale = (M^{-1})^T = reciprocal scale.
+                                // Guard against zero components.
+                                const Vector3f invS(
+                                    std::abs(s.x) > 1e-9f ? 1.f / s.x : 1.f,
+                                    std::abs(s.y) > 1e-9f ? 1.f / s.y : 1.f,
+                                    std::abs(s.z) > 1e-9f ? 1.f / s.z : 1.f
+                                );
+                                normalTransform = Matrix4f::scale(invS) * normalTransform;
+                            }
+                            else if (tname == "rotate") {
+                                const Vector3f axis  = parseVec3(tchild.attribute("axis").value());
+                                const float    angle = toF(tchild.attribute("angle").value());
+                                meshTransform   = Matrix4f::rotate(axis, angle) * meshTransform;
+                                // For rotations R^{-T} = R (orthogonal matrix).
+                                normalTransform = Matrix4f::rotate(axis, angle) * normalTransform;
                             }
                         }
                     }
                 }
 
-                out.materials.emplace_back(makeMaterialFromPropertyLists(bsdfProps, emitterProps));
-                if (!parseMesh(baseDir, objFile, nextMatId++, meshTransform, out, errorOut))
+                out.materials.emplace_back(
+                    makeMaterialFromPropertyLists(bsdfProps, emitterProps, out.warnings));
+
+                if (!parseMesh(baseDir, objFile, meshName, nextMatId++,
+                               emitterId, meshTransform, normalTransform, out, errorOut))
                     return false;
 
             } catch (const std::exception& e) {
@@ -267,6 +366,10 @@ bool SceneLoader::load(const std::string& xmlPath,
                 return false;
             }
         }
+
+        // ----------------------------------------------------------------
+        // <camera>
+        // ----------------------------------------------------------------
         else if (name == "camera") {
             PropertyList cameraProps;
             fillPropertyList(node, cameraProps,
@@ -281,7 +384,7 @@ bool SceneLoader::load(const std::string& xmlPath,
                     if (std::string(child.attribute("name").value()) == "fov")
                         fov = toF(child.attribute("value").value());
                 } else if (cn == "transform") {
-                    pugi::xml_node lookat = child.child("lookat");
+                    const pugi::xml_node lookat = child.child("lookat");
                     if (lookat) {
                         originStr = lookat.attribute("origin").value();
                         targetStr = lookat.attribute("target").value();
@@ -295,7 +398,7 @@ bool SceneLoader::load(const std::string& xmlPath,
                     return false;
             }
         }
-        // sampler, integrator, etc. — silently skipped
+        // sampler, integrator, etc. - silently skipped
     }
 
     if (out.triangles.empty()) {

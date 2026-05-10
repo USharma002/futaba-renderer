@@ -62,6 +62,16 @@ void buildCornellBox(Scene &scene) {
 
   scene.setTriangles(triangles.data(), (uint32_t)triangles.size());
   scene.setMaterials(materials.data(), (uint32_t)materials.size());
+  
+  // Create a single mesh instance for the entire Cornell box
+  std::vector<futaba::MeshInstanceGPU> meshes;
+  futaba::MeshInstanceGPU cbMesh;
+  cbMesh.triangleStart = 0;
+  cbMesh.triangleCount = (uint32_t)triangles.size();
+  cbMesh.emitterId = -1;
+  meshes.push_back(cbMesh);
+  scene.setMeshes(meshes.data(), (uint32_t)meshes.size());
+  scene.setEmitters(nullptr, 0);
 }
 
 namespace futaba {

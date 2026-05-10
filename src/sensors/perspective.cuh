@@ -9,14 +9,15 @@
 namespace futaba {
 
 class PerspectiveCamera {
-public: 
-    Point3f position;
-    
-    // Precomputed Axes (World Space)
+public:
+    Point3f  position;
+
+    // Precomputed orthonormal axes (world space).
+    // Invariant: right, trueUp, forward are always mutually orthogonal unit vectors.
     Vector3f forward;
     Vector3f right;
     Vector3f trueUp;
-    
+
     // Precomputed FOV values
     float tanHalfFovY;
     float aspectRatio;
@@ -29,58 +30,65 @@ public:
     HD PerspectiveCamera(float fovY, float aspect) {
         init(Point3f(0, 0, 5), Point3f(0, 0, 0), Vector3f(0, 1, 0), fovY, aspect);
     }
-    
-    // Parameterized constructor
+
     HD PerspectiveCamera(Point3f pos, Point3f target, Vector3f up, float fovY, float aspect) {
         init(pos, target, up, fovY, aspect);
     }
 
-    // Call this whenever the camera moves or the window resizes
+    // Fully initialises the camera. Must be called whenever position, target, up, FOV,
+    // or aspect ratio change. All other helpers (setPosition, setTarget, setUp) delegate
+    // here to ensure the orthonormal frame is always consistent.
     HD void init(Point3f pos, Point3f target, Vector3f up, float fovY, float aspect) {
-        position = pos;
+        position    = pos;
         aspectRatio = aspect;
-        
-        // Calculate camera axes using our global normalize() and cross() functions
-        forward = normalize(target - position);
-        right = normalize(cross(forward, up));
-        trueUp = cross(right, forward);
 
-        // Precompute the tangent so we don't do trigonometry per-pixel
+        forward = normalize(target - position);
+        right   = normalize(cross(forward, up));
+        trueUp  = cross(right, forward); // already unit length (forward and right are orthonormal)
+
         tanHalfFovY = tanf(degToRad(fovY) / 2.0f);
     }
-    
-    // This runs on the GPU millions of times per frame!
+
+    // Generates a world-space ray through normalised image-plane coordinate (u, v).
+    // u, v ∈ [0, 1]. Runs on the GPU millions of times per frame.
     HD Ray3f sampleRay(float u, float v) const {
-        // (2u - 1) remaps 0..1 to -1..1
-        // (1 - 2v) remaps 0..1 to 1..-1 (flips Y axis so +Y is up)
+        
         float px = (2.0f * u - 1.0f) * aspectRatio * tanHalfFovY;
         float py = (1.0f - 2.0f * v) * tanHalfFovY;
 
-        // Instantly build the world-space ray direction using our precomputed axes!
-        // No matrix inversion required.
-        Vector3f rayDirWorld = normalize(right * px + trueUp * py + forward);
-
-        return Ray3f(position, rayDirWorld);
+        // No matrix inversion - use precomputed orthonormal axes.
+        Vector3f dir = normalize(right * px + trueUp * py + forward);
+        return Ray3f(position, dir);
     }
 
-    // Helper to update FOV
+    // -----------------------------------------------------------------------
+    // Helpers - each one rebuilds the full frame so the invariant is preserved.
+    // -----------------------------------------------------------------------
+
+    // Change FOV; does not affect the viewing direction or axes.
     HD void setFov(float newFovY) {
         tanHalfFovY = tanf(degToRad(newFovY) / 2.0f);
     }
-    
-    // Helper to set camera position
+
+    // Reposition the camera origin; recomputes axes from the new position.
+    // The current forward and trueUp are used as hints for target and up respectively.
     HD void setPosition(const Point3f& pos) {
-        position = pos;
+        Point3f target = position + forward; // keep the same look direction
+        init(pos, target, trueUp, 0.f, aspectRatio);
     }
-    
-    // Helper to set camera target (and recompute axes)
+
+    // Repoint the camera at a new target, recomputing the full orthonormal frame.
+    // Uses the current trueUp as the "up hint". If forward becomes parallel to trueUp
+    // (gimbal lock) the result is undefined - use full init() in that case.
     HD void setTarget(const Point3f& target) {
         forward = normalize(target - position);
+        right   = normalize(cross(forward, trueUp));
+        trueUp  = cross(right, forward);
     }
-    
-    // Helper to set camera up vector (and recompute axes)
+
+    // Replace the up hint and recompute right / trueUp from the current forward.
     HD void setUp(const Vector3f& up) {
-        right = normalize(cross(forward, up));
+        right  = normalize(cross(forward, up));
         trueUp = cross(right, forward);
     }
 };

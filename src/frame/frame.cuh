@@ -24,7 +24,7 @@ struct Frame {
 
   HD static float cos_theta(const Vector3f &v) { return v.z; }
 
-  HD static float absCosTheta(const Vector3f &v) { return fabsf(v.z); }
+  HD static float abs_cos_theta(const Vector3f &v) { return fabsf(v.z); }
 
   HD Vector3f to_local(const Vector3f &v) const {
     return Vector3f(dot(v, s), dot(v, t), dot(v, n));

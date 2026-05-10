@@ -1,6 +1,6 @@
 #include "ray.cuh"
 #include "common.cuh"
-#include "../bsdfs/diffuse.cuh"
+#include "diffuse.cuh"
 
 namespace futaba {
 
@@ -36,6 +36,7 @@ struct Sphere {
         rec.material_id = material_id;
         rec.albedo = bsdf.albedo;
         rec.front_face = dot(r.d, rec.n) < 0.0f;
+        
         Vector3f frame_n = rec.front_face ? rec.n : -rec.n;
         rec.set_frame_from_normal(frame_n);
         

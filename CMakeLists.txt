@@ -1,13 +1,13 @@
 cmake_minimum_required(VERSION 3.18)
 
-# 1. Enable BOTH C++ and CUDA languages
+# Enable BOTH C++ and CUDA languages
 project(app LANGUAGES CXX CUDA)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CUDA_STANDARD 17)
 
-# 2. Find the CUDA Toolkit
+# Find the CUDA Toolkit
 find_package(CUDAToolkit REQUIRED)
 
 # Disable NanoGUI python bindings and examples
@@ -17,9 +17,6 @@ set(NANOGUI_BUILD_SHARED OFF CACHE BOOL "Build static library" FORCE)
 
 add_subdirectory(ext/nanogui)
 
-# ---------------------------------------------------------
-# CHANGE 1: Add src/gui/gui.cpp to the executable
-# ---------------------------------------------------------
 add_executable(app 
     main.cpp 
     src/gui/renderer_host.cpp 
@@ -43,6 +40,7 @@ target_compile_definitions(app PRIVATE NANOGUI_GLAD)
 
 set(APP_INCLUDES
     ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/accel
     ${CMAKE_CURRENT_SOURCE_DIR}/src/core
     ${CMAKE_CURRENT_SOURCE_DIR}/src/films
     ${CMAKE_CURRENT_SOURCE_DIR}/src/frame

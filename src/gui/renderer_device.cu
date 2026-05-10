@@ -42,7 +42,7 @@ extern "C" __global__ void __raygen__render() {
     Normals normals;
     radiance = normals.sample(ray, params.scene, sampler);
   } else if (params.integrator_mode == INTEGRATOR_HEATMAP) {
-    Heatmap heatmap(16);
+    Heatmap heatmap;
     radiance = heatmap.sample(ray, params.scene, sampler);
   } else {
     Path integrator(params.max_depth, params.rr_depth);
