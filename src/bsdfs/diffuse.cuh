@@ -25,13 +25,13 @@ struct Diffuse {
     HD float pdf(const BSDFSample& bs) const {
         if (Frame::cos_theta(bs.wo) <= 0.f || Frame::cos_theta(bs.wi) <= 0.f)
             return 0.f;
-        return Warp::square_to_cosine_hemisphere_pdf(bs.wo);
+        return Warp::squareToCosineHemispherePdf(bs.wo);
     }
 
     // Cosine-weighted hemisphere sample. weight = albedo (eval * cos / pdf simplifies).
     HD Color3f sample(BSDFSample& bs, const Point2f& s2) const {
-        bs.wo           = Warp::square_to_cosine_hemisphere(s2);
-        bs.pdf          = Warp::square_to_cosine_hemisphere_pdf(bs.wo);
+        bs.wo           = Warp::squareToCosineHemisphere(s2);
+        bs.pdf          = Warp::squareToCosineHemispherePdf(bs.wo);
         bs.weight       = albedo;
         bs.eta          = 1.f;
         bs.sampled_type = BSDF_ID_DIFFUSE;

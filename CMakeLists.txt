@@ -52,6 +52,7 @@ set(APP_INCLUDES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/shapes
     ${CMAKE_CURRENT_SOURCE_DIR}/src/sampler
     ${CMAKE_CURRENT_SOURCE_DIR}/src/bsdfs
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/emitters
     ${CMAKE_CURRENT_SOURCE_DIR}/src/materials
     ${CMAKE_CURRENT_SOURCE_DIR}/ext/nanogui/include
     ${CMAKE_CURRENT_SOURCE_DIR}/ext/pugixml/src

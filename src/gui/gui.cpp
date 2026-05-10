@@ -221,6 +221,17 @@ bool FutabaScreen::loadScene(const std::string &xmlPath) {
         emittersGPU.push_back(g);
     }
     m_scene.setEmitters(emittersGPU.data(), (uint32_t)emittersGPU.size());
+
+    if (loaded.hasEnvMap) {
+        m_scene.setEnvironmentMap(loaded.envMapPixels.data(),
+                                  (uint32_t)loaded.envMapWidth,
+                                  (uint32_t)loaded.envMapHeight,
+                                  loaded.envMapToWorld);
+    } else if (loaded.hasConstantEnv) {
+        m_scene.setConstantEnvironment(loaded.constantEnv);
+    } else {
+        m_scene.setEnvironmentMap(nullptr, 0, 0, ::Matrix4f());
+    }
     
     m_scene.use_vertex_normals = m_useVertexNormals;
 

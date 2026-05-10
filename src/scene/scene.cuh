@@ -7,6 +7,7 @@
 #include "triangle.cuh"
 #include "material.cuh"
 #include "bvh.cuh"
+#include "envmap.cuh"
 
 namespace futaba {
 
@@ -80,6 +81,8 @@ struct Scene {
     EmitterGPU*     emitters     = nullptr;
     uint32_t        emitterCount = 0;
 
+    EnvironmentMapEmitter envMap;
+
     BVH             bvh;
     bool            use_vertex_normals = false;
 
@@ -107,9 +110,15 @@ struct Scene {
 
         if (hit && rec.material_id >= 0 && rec.material_id < (int)materialCount) {
             const Material& mat = materials[rec.material_id];
-            rec.albedo   = mat.albedo;
+            rec.albedo = mat.albedo;
+            rec.specular = mat.specular;
             rec.emission = mat.emission;
+            rec.conductor_eta = mat.conductorEta;
+            rec.conductor_k   = mat.conductorK;
+            rec.ext_ior  = mat.extIOR;
             rec.ior      = mat.intIOR;
+            rec.alpha    = mat.alpha;
+            rec.is_conductor = mat.isConductor;
             rec.mat_type = mat.type;
         }
 
@@ -164,29 +173,45 @@ struct Scene {
         return emitter_eval(meshEmitterId, si);
     }
 
+    HD Color3f eval_environment(const Vector3f& dirWorld) const {
+        return envMap.eval(dirWorld);
+    }
+
     // -----------------------------------------------------------------------
     // NEE / direct-lighting API stubs (to be implemented).
     // -----------------------------------------------------------------------
     HD bool sample_emitter_direction(const SurfaceIntersection& /*si*/,
-                                     const Point2f&              /*sample*/,
+                                     const Point2f&              sample,
                                      EmitterDirectionSample&     ds,
                                      Color3f&                    weight) const
     {
-        ds     = EmitterDirectionSample();
-        weight = Color3f(0.f);
-        return false;
+        if (!envMap.isActive()) {
+            ds     = EmitterDirectionSample();
+            weight = Color3f(0.f);
+            return false;
+        }
+
+        ds.p = Point3f(0.f, 0.f, 0.f);
+        ds.d = envMap.sampleDirection(sample);
+        ds.delta = false;
+        ds.dist = 1e30f;
+        ds.emitterId = -1;
+
+        ds.pdf = envMap.pdf(ds.d);
+        weight = envMap.eval(ds.d) * (4.f * M_PI);
+        return true;
     }
 
     HD float pdf_emitter_direction(const SurfaceIntersection&    /*si*/,
                                    const EmitterDirectionSample& /*ds*/) const
     {
-        return 0.f;
+        return envMap.isActive() ? 1.f / (4.f * M_PI) : 0.f;
     }
 
     HD Color3f eval_emitter_direction(const SurfaceIntersection&    /*si*/,
-                                      const EmitterDirectionSample& /*ds*/) const
+                                      const EmitterDirectionSample& ds) const
     {
-        return Color3f(0.f);
+        return envMap.eval(ds.d);
     }
 
     // -----------------------------------------------------------------------
@@ -250,6 +275,15 @@ struct Scene {
                               cudaMemcpyHostToDevice));
     }
 
+    void setEnvironmentMap(const Color3f* hostPixels, uint32_t width, uint32_t height,
+                           const Matrix4f& envToWorld) {
+        envMap.setMap(hostPixels, width, height, envToWorld);
+    }
+
+    void setConstantEnvironment(const Color3f& radiance) {
+        envMap.setConstant(radiance);
+    }
+
     void clear() {
         if (triangles != nullptr) { CUDA_CHECK(cudaFree(triangles)); triangles = nullptr; }
         triangleCount = 0;
@@ -263,6 +297,8 @@ struct Scene {
 
         if (emitters != nullptr) { CUDA_CHECK(cudaFree(emitters)); emitters = nullptr; }
         emitterCount = 0;
+
+        envMap.clear();
     }
 };
 

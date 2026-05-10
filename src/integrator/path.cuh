@@ -25,12 +25,16 @@ struct Path {
     HD Color3f sample(const Ray& ray, const Scene& scene, Sampler& sampler) const {
         Color3f L(0.f); // Radiance accumulator
         Color3f f(1.f); // Path throughput
+        float ior(1.0f); // Index of Refraction
+
         Ray     current_ray = ray;
 
         for (int depth = 0; depth < max_depth; ++depth) {
             SurfaceIntersection si;
-            if (!scene.intersect(current_ray, current_ray.mint, current_ray.maxt, si))
+            if (!scene.intersect(current_ray, current_ray.mint, current_ray.maxt, si)) {
+                L += f * scene.eval_environment(current_ray.d);
                 break;
+            }
 
             // Emission at the hit point (e.g., area lights hit by camera or bounce ray).
             L += direct_emission(scene, si, f);
@@ -44,6 +48,7 @@ struct Path {
                 break;
 
             f *= bsdf_weight;
+            ior *= bs.eta;
 
             // Early exit for zero-throughput paths (avoids wasted bounces).
             const float max_f = fmaxf(f.x, fmaxf(f.y, f.z));

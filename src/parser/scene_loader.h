@@ -55,6 +55,14 @@ struct LoadedScene {
     std::vector<EmitterInstance> emitters;
     std::vector<MeshInstance>   meshes;
 
+    bool                 hasEnvMap = false;
+    std::vector<Color3f>  envMapPixels;
+    int                  envMapWidth = 0;
+    int                  envMapHeight = 0;
+    Matrix4f             envMapToWorld;
+    bool                 hasConstantEnv = false;
+    Color3f              constantEnv = Color3f(0.f);
+
     bool       hasCamera = false;
     Point3f    camOrigin;
     Point3f    camTarget;
