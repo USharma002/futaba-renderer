@@ -14,8 +14,8 @@ Futaba is a high-performance, learning-oriented physically-based renderer writte
 ## Features
 
 ### Current Implementation
-- **GPU Acceleration**: CUDA-based pipeline with NVIDIA OptiX hardware acceleration and an optimized software BVH fallback.
-- **Interactive UI**: Real-time viewport driven by NanoGUI featuring:
+- [x] **GPU Acceleration**: CUDA-based pipeline with NVIDIA OptiX hardware acceleration and an optimized software BVH fallback.
+- [x] **Interactive UI**: Real-time viewport driven by NanoGUI featuring:
    ![Interactive UI - Default](assets/futaba-window.png)
   - Smooth WASD navigation with gimbal-lock-free quaternion rotations.
   - On-screen orientation gizmo anchored to the top-right corner.
@@ -24,22 +24,34 @@ Futaba is a high-performance, learning-oriented physically-based renderer writte
   - Interactive FOV and depth sliders with real-time accumulation reset.
 
   ![Interactive UI - Spaceship](assets/spaceship-window.png)
-- **Scene Parsing**: 
+- [x] **Scene Parsing**: 
   - Loading logic based on the **Nori** renderer, with an overall structure based on a **Mitsuba hybrid** approach.
   - XML loader supporting nested `<transform>` blocks and advanced OBJ parsing.
-- **Integrators**: 
-  - **Path Tracing**: Full Monte Carlo integration with Russian Roulette.
+- [x] **Integrators**: 
+  - [x] **Path Tracing**: Full Monte Carlo integration with Russian Roulette.
     ![Path Tracing](assets/dragon-cbox.png)
-  - **Normals**: Surface normal visualization for debugging.
+  - [x] **Normals**: Surface normal visualization for debugging.
     ![Surface Normals](assets/dragon-cbox-normals.png)
-  - **Heatmap**: AABB intersection complexity visualization.
+  - [x] **Heatmap**: AABB intersection complexity visualization.
     ![Intersection Heatmap](assets/dragon-cbox-heatmap.png)
-- **Films**: 32-bit HDR accumulation with zero-copy OpenGL PBO display and EXR export support.
+- [x] **Films**: 32-bit HDR accumulation with zero-copy OpenGL PBO display and EXR export support.
 
 ### Planned Features
-- **Advanced Path Guiding**: Learn and adapt to scene-specific light transport patterns.
-- **Complex Materials**: Rough conductors, dielectrics, and layered materials.
-- **Media**: Volumetric rendering support.
+- [x] Done
+  - [x] Normal Visualization
+  - [x] Path tracing
+- [~] Partially done
+  - [~] Various Materials
+  - [~] Textures and Environment map support
+- [ ] Not started
+  - [ ] Next Event Estimation (NEE)
+  - [ ] Multiple Importance Sampling (MIS)
+  - [ ] Path Guiding (PPG, SDMM, NPM etc.)
+  - [ ] Bidirectional Path Tracing
+  - [ ] Photon Mapping
+  - [ ] Radiosity
+  - [ ] Volume Rendering
+  - [ ] Basic Differentiable Rendering
 
 ## Architecture Overview
 
