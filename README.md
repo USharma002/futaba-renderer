@@ -2,7 +2,14 @@
 
 Futaba is a high-performance, learning-oriented physically-based renderer written in **C++ and CUDA**. Inspired by [Mitsuba](https://www.mitsuba-renderer.org/), this project focuses on clear architecture and the implementation of advanced rendering techniques.
 
-![Renderer Preview](assets/dragon-cbox.png)
+![Renderer Preview](assets/chess.png)
+
+## High Quality Renders
+
+| Dragon Cornell Box | Depth of Field |
+|:---:|:---:|
+| ![Dragon CBox](assets/dragon-cbox.png) | ![Chess DOF](assets/chess-dof.png) |
+
 
 ## Available Visualizations
 
