@@ -44,6 +44,9 @@ struct Vector2 {
     HD Vector2& operator*=(T s) { x *= s; y *= s; return *this; }
     
     HD Vector2 operator-() const { return Vector2(-x, -y); }
+    
+    HD T& operator[](int i) { return (&x)[i]; }
+    HD const T& operator[](int i) const { return (&x)[i]; }
 };
 
 // Point2 (Semantically distinct from Vector2)
@@ -61,6 +64,9 @@ struct Point2 {
     HD Vector2<T> operator-(const Point2& p) const { return Vector2<T>(x - p.x, y - p.y); }
     // Point - Vector = Point
     HD Point2 operator-(const Vector2<T>& v) const { return Point2(x - v.x, y - v.y); }
+    
+    HD T& operator[](int i) { return (&x)[i]; }
+    HD const T& operator[](int i) const { return (&x)[i]; }
 };
 
 // Vector3
@@ -86,6 +92,9 @@ struct Vector3 {
 
     HD T lengthSquared() const { return x*x + y*y + z*z; }
     HD T length() const { return std::sqrt(lengthSquared()); }
+    
+    HD T& operator[](int i) { return (&x)[i]; }
+    HD const T& operator[](int i) const { return (&x)[i]; }
 };
 
 // Point3
@@ -104,6 +113,9 @@ struct Point3 {
     // For affine combinations (e.g. barycentric coordinates)
     HD Point3 operator*(T s) const { return Point3(x * s, y * s, z * s); }
     HD Point3 operator+(const Point3& p) const { return Point3(x + p.x, y + p.y, z + p.z); }
+    
+    HD T& operator[](int i) { return (&x)[i]; }
+    HD const T& operator[](int i) const { return (&x)[i]; }
 };
 
 // -----------------------------------------------------------------------------

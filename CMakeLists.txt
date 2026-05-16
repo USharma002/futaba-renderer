@@ -54,6 +54,7 @@ set(APP_INCLUDES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/bsdfs
     ${CMAKE_CURRENT_SOURCE_DIR}/src/emitters
     ${CMAKE_CURRENT_SOURCE_DIR}/src/materials
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/medium
     ${CMAKE_CURRENT_SOURCE_DIR}/ext/nanogui/include
     ${CMAKE_CURRENT_SOURCE_DIR}/ext/pugixml/src
     ${CMAKE_CURRENT_SOURCE_DIR}/ext/tinyexr

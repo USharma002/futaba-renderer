@@ -69,31 +69,6 @@ struct AABB {
     }
 
     // Your exact, safe intersection logic. Safely swallows NaNs.
-    HD bool intersect(const Ray& ray, float tMin, float tMax) const {
-        float tx1 = (minP.x - ray.o.x) * ray.dRcp.x;
-        float tx2 = (maxP.x - ray.o.x) * ray.dRcp.x;
-        float tNear = tx1 < tx2 ? tx1 : tx2;
-        float tFar = tx1 > tx2 ? tx1 : tx2;
-        tMin = tNear > tMin ? tNear : tMin;
-        tMax = tFar < tMax ? tFar : tMax;
-
-        float ty1 = (minP.y - ray.o.y) * ray.dRcp.y;
-        float ty2 = (maxP.y - ray.o.y) * ray.dRcp.y;
-        tNear = ty1 < ty2 ? ty1 : ty2;
-        tFar = ty1 > ty2 ? ty1 : ty2;
-        tMin = tNear > tMin ? tNear : tMin;
-        tMax = tFar < tMax ? tFar : tMax;
-
-        float tz1 = (minP.z - ray.o.z) * ray.dRcp.z;
-        float tz2 = (maxP.z - ray.o.z) * ray.dRcp.z;
-        tNear = tz1 < tz2 ? tz1 : tz2;
-        tFar = tz1 > tz2 ? tz1 : tz2;
-        tMin = tNear > tMin ? tNear : tMin;
-        tMax = tFar < tMax ? tFar : tMax;
-
-        return tMax >= tMin;
-    }
-
     HD bool intersectDist(const Ray& ray, float tMin, float tMax, float& dist) const {
         float tx1 = (minP.x - ray.o.x) * ray.dRcp.x;
         float tx2 = (maxP.x - ray.o.x) * ray.dRcp.x;
@@ -121,6 +96,11 @@ struct AABB {
             return true;
         }
         return false;
+    }
+
+    HD bool intersect(const Ray& ray, float tMin, float tMax) const {
+        float dist;
+        return intersectDist(ray, tMin, tMax, dist);
     }
 };
 
@@ -215,16 +195,13 @@ struct BVH {
                 axis = 2;
             }
 
-            float splitPos = axis == 0 ? centroidBounds.centroid().x
-                           : axis == 1 ? centroidBounds.centroid().y
-                                       : centroidBounds.centroid().z;
+            float splitPos = centroidBounds.centroid()[axis];
 
             auto midIt = std::partition(hostIndices.begin() + start,
                                         hostIndices.begin() + start + count,
                                         [&](int triIdx) {
                                             Point3f c = triangleCentroid(hostTriangles[triIdx]);
-                                            float value = axis == 0 ? c.x : (axis == 1 ? c.y : c.z);
-                                            return value < splitPos;
+                                            return c[axis] < splitPos;
                                         });
 
             int leftCount = (int)(midIt - (hostIndices.begin() + start));
@@ -236,9 +213,7 @@ struct BVH {
                                  hostIndices.begin() + start + count,[&](int a, int b) {
                                      Point3f ca = triangleCentroid(hostTriangles[a]);
                                      Point3f cb = triangleCentroid(hostTriangles[b]);
-                                     float va = axis == 0 ? ca.x : (axis == 1 ? ca.y : ca.z);
-                                     float vb = axis == 0 ? cb.x : (axis == 1 ? cb.y : cb.z);
-                                     return va < vb;
+                                     return ca[axis] < cb[axis];
                                  });
             }
 
@@ -330,7 +305,7 @@ struct BVH {
                 for (int i = 0; i < node.triCount; ++i) {
                     int triIdx = bvhTriIndices[node.leftFirst + i];
                     SurfaceIntersection tmp;
-                    if (triangles[triIdx].intersect(ray, tMin, closest, tmp, use_vertex_normals)) {
+                    if (triangles[triIdx].intersect(ray, tMin, closest, tmp, use_vertex_normals, triIdx)) {
                         hit = true;
                         closest = tmp.t;
                         rec = tmp;

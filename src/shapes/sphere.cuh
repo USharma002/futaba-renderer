@@ -8,7 +8,6 @@ struct Sphere {
     Point3f center;
     float radius;
     int material_id;
-    Diffuse bsdf;
 
     HD bool intersect(const Ray& r, float t_min, float t_max, SurfaceIntersection& rec) const {
         Vector3f oc = r.o - center;
@@ -34,7 +33,6 @@ struct Sphere {
         rec.wi = -r.d;
         rec.shape_id = -1;
         rec.material_id = material_id;
-        rec.albedo = bsdf.albedo;
         rec.front_face = dot(r.d, rec.n) < 0.0f;
         
         Vector3f frame_n = rec.front_face ? rec.n : -rec.n;

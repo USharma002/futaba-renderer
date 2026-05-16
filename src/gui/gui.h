@@ -44,10 +44,15 @@ private:
   nanogui::Label *m_fpsLabel = nullptr;
   nanogui::Label *m_sceneLabel = nullptr;
   nanogui::Label *m_triCountLabel = nullptr;
+  nanogui::Window *m_phongWindow = nullptr;
+  nanogui::Window *m_settingsWindow = nullptr;
   nanogui::Slider *m_fovSlider = nullptr;
+  nanogui::Slider *m_focusSlider = nullptr;
+  nanogui::Slider *m_apertureSlider = nullptr;
   int m_maxDepth = 12;
   int m_rrDepth = 5;
   int m_integratorMode = futaba::INTEGRATOR_PATH;
+  int m_tonemappingMode = futaba::TONEMAPPING_NONE;
   bool m_useVertexNormals = true;
   bool m_useAntialiasing = true;
 
@@ -70,4 +75,12 @@ private:
   ::Vector3f m_camUp = ::Vector3f(0.f, 1.f, 0.f);
   float m_moveSpeed = 2.f;
   float m_currentFov = 39.3077f;
+  float m_currentFocusDistance = 1.f;
+  float m_currentApertureRadius = 0.0f;
+
+  ::Vector3f m_phongLightDir = ::Vector3f(1.f, 1.f, 1.f);
+  float m_phongAmbient = 0.12f;
+  float m_phongDiffuse = 0.88f;
+  float m_phongSpecular = 0.35f;
+  float m_phongShininess = 32.f;
 };

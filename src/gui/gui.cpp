@@ -4,6 +4,7 @@
 #include "renderer.h"
 #include "scene_loader.h"
 #include <filesystem>
+#include <functional>
 #include <iostream>
 
 using namespace nanogui;
@@ -12,6 +13,14 @@ namespace fs = std::filesystem;
 
 static constexpr float kMinFov = 5.f;
 static constexpr float kMaxFov = 120.f;
+static constexpr float kMinFocusDistance = 0.1f;
+static constexpr float kMaxFocusDistance = 50.f;
+static constexpr float kMinApertureRadius = 0.f;
+static constexpr float kMaxApertureRadius = 0.5f;
+static constexpr float kMinPhongStrength = 0.f;
+static constexpr float kMaxPhongStrength = 2.f;
+static constexpr float kMinPhongShininess = 1.f;
+static constexpr float kMaxPhongShininess = 128.f;
 
 static float fovToSlider(float fov) {
     float t = (fov - kMinFov) / (kMaxFov - kMinFov);
@@ -28,6 +37,59 @@ static float sliderToFov(float t) {
     if (t > 1.f)
         t = 1.f;
     return kMinFov + t * (kMaxFov - kMinFov);
+}
+
+static float focusDistanceToSlider(float focusDistance) {
+    float t = (focusDistance - kMinFocusDistance) /
+              (kMaxFocusDistance - kMinFocusDistance);
+    if (t < 0.f)
+        t = 0.f;
+    if (t > 1.f)
+        t = 1.f;
+    return t;
+}
+
+static float sliderToFocusDistance(float t) {
+    if (t < 0.f)
+        t = 0.f;
+    if (t > 1.f)
+        t = 1.f;
+    return kMinFocusDistance + t * (kMaxFocusDistance - kMinFocusDistance);
+}
+
+static float apertureToSlider(float apertureRadius) {
+    float t = (apertureRadius - kMinApertureRadius) /
+              (kMaxApertureRadius - kMinApertureRadius);
+    if (t < 0.f)
+        t = 0.f;
+    if (t > 1.f)
+        t = 1.f;
+    return t;
+}
+
+static float sliderToAperture(float t) {
+    if (t < 0.f)
+        t = 0.f;
+    if (t > 1.f)
+        t = 1.f;
+    return kMinApertureRadius + t * (kMaxApertureRadius - kMinApertureRadius);
+}
+
+static float toUnitRange(float value, float minVal, float maxVal) {
+    float t = (value - minVal) / (maxVal - minVal);
+    if (t < 0.f)
+        t = 0.f;
+    if (t > 1.f)
+        t = 1.f;
+    return t;
+}
+
+static float fromUnitRange(float t, float minVal, float maxVal) {
+    if (t < 0.f)
+        t = 0.f;
+    if (t > 1.f)
+        t = 1.f;
+    return minVal + t * (maxVal - minVal);
 }
 
 FutabaScreen::FutabaScreen(int width, int height)
@@ -69,12 +131,71 @@ FutabaScreen::FutabaScreen(int width, int height)
 
     new Label(window, "Integrator", "sans-bold");
     ComboBox *integratorCombo =
-            new ComboBox(window, {"Path", "Normals", "Heatmap"});
+            new ComboBox(window, {"Path", "Normals", "Depth", "Albedo", "Phong", "Primitives", "Heatmap", "VolPath"});
     integratorCombo->setSelectedIndex((int)m_integratorMode);
     integratorCombo->setCallback([this](int index) {
         m_integratorMode = index;
+        if (m_phongWindow)
+            m_phongWindow->setVisible(index == futaba::INTEGRATOR_PHONG);
+        performLayout();
         m_film->clear();
     });
+
+        Button *btnSettings = new Button(window, "Settings");
+        btnSettings->setCallback([this] {
+            if (m_settingsWindow)
+                m_settingsWindow->setVisible(!m_settingsWindow->visible());
+        });
+
+        m_settingsWindow = new Window(this, "Rendering Settings");
+        m_settingsWindow->setPosition(nanogui::Vector2i(245, 15));
+        m_settingsWindow->setLayout(new GroupLayout(10, 5, 5, 5));
+        m_settingsWindow->setVisible(false);
+
+        new Label(m_settingsWindow, "Tonemapping", "sans-bold");
+        ComboBox *tonemmapCombo =
+                new ComboBox(m_settingsWindow, {"None", "ACES", "Reinhardt", "Filmic"});
+        tonemmapCombo->setSelectedIndex((int)m_tonemappingMode);
+        tonemmapCombo->setCallback([this](int index) {
+            m_tonemappingMode = index;
+            m_film->clear();
+        });
+
+    m_phongWindow = new Window(this, "Phong Controls");
+    m_phongWindow->setPosition(nanogui::Vector2i(245, 15));
+    m_phongWindow->setLayout(new GroupLayout(10, 5, 5, 5));
+
+    auto addPhongSlider = [this](const std::string &name, float minVal,
+                                 float maxVal, float initialValue,
+                                 const std::function<void(float)> &onChange) {
+        new Label(m_phongWindow, name, "sans-bold");
+        Widget *panel = new Widget(m_phongWindow);
+        panel->setLayout(
+                new BoxLayout(Orientation::Horizontal, Alignment::Middle, 0, 10));
+
+        Slider *slider = new Slider(panel);
+        slider->setFixedWidth(120);
+        slider->setValue(toUnitRange(initialValue, minVal, maxVal));
+
+        Label *valueLabel = new Label(panel, std::to_string(initialValue));
+        slider->setCallback([this, minVal, maxVal, valueLabel, onChange](float t) {
+            const float value = fromUnitRange(t, minVal, maxVal);
+            valueLabel->setCaption(std::to_string(value));
+            onChange(value);
+            m_film->clear();
+        });
+    };
+
+    addPhongSlider("Ambient", kMinPhongStrength, kMaxPhongStrength,
+                   m_phongAmbient, [this](float v) { m_phongAmbient = v; });
+    addPhongSlider("Diffuse", kMinPhongStrength, kMaxPhongStrength,
+                   m_phongDiffuse, [this](float v) { m_phongDiffuse = v; });
+    addPhongSlider("Specular", kMinPhongStrength, kMaxPhongStrength,
+                   m_phongSpecular, [this](float v) { m_phongSpecular = v; });
+    addPhongSlider("Shininess", kMinPhongShininess, kMaxPhongShininess,
+                   m_phongShininess, [this](float v) { m_phongShininess = v; });
+
+    m_phongWindow->setVisible(m_integratorMode == futaba::INTEGRATOR_PHONG);
 
     CheckBox *cbNormals = new CheckBox(window, "Use Vertex Normals");
     cbNormals->setChecked(m_useVertexNormals);
@@ -96,8 +217,35 @@ FutabaScreen::FutabaScreen(int width, int height)
     m_fovSlider->setValue(fovToSlider(m_currentFov));
     m_fovSlider->setCallback([this](float value) {
         m_currentFov = sliderToFov(value);
-        m_camera.setFov(m_currentFov);
-        m_film->clear();
+        updateCamera();
+    });
+
+    new Label(window, "Focus Distance", "sans-bold");
+    Widget *focusPanel = new Widget(window);
+    focusPanel->setLayout(
+            new BoxLayout(Orientation::Horizontal, Alignment::Middle, 0, 10));
+    m_focusSlider = new Slider(focusPanel);
+    m_focusSlider->setValue(focusDistanceToSlider(m_currentFocusDistance));
+    m_focusSlider->setFixedWidth(100);
+    Label *focusVal = new Label(focusPanel, std::to_string(m_currentFocusDistance));
+    m_focusSlider->setCallback([this, focusVal](float value) {
+        m_currentFocusDistance = sliderToFocusDistance(value);
+        focusVal->setCaption(std::to_string(m_currentFocusDistance));
+        updateCamera();
+    });
+
+    new Label(window, "Aperture", "sans-bold");
+    Widget *aperturePanel = new Widget(window);
+    aperturePanel->setLayout(
+            new BoxLayout(Orientation::Horizontal, Alignment::Middle, 0, 10));
+    m_apertureSlider = new Slider(aperturePanel);
+    m_apertureSlider->setValue(apertureToSlider(m_currentApertureRadius));
+    m_apertureSlider->setFixedWidth(100);
+    Label *apertureVal = new Label(aperturePanel, std::to_string(m_currentApertureRadius));
+    m_apertureSlider->setCallback([this, apertureVal](float value) {
+        m_currentApertureRadius = sliderToAperture(value);
+        apertureVal->setCaption(std::to_string(m_currentApertureRadius));
+        updateCamera();
     });
     
     m_fpsLabel = new Label(window, "FPS: 0.0");
@@ -153,7 +301,7 @@ FutabaScreen::FutabaScreen(int width, int height)
         m_triCountLabel->setCaption("Triangles: " +
                                                                 std::to_string(m_scene.triangleCount));
 
-    // Ensure camera is fully initialized with correct aspect ratio
+    // Ensure camera is fully initialized with correct aspect ratio and lens settings
     updateCamera();
 }
 
@@ -239,12 +387,24 @@ bool FutabaScreen::loadScene(const std::string &xmlPath) {
         int fw, fh;
         glfwGetFramebufferSize(glfwWindow(), &fw, &fh);
         float currentAspect = (float)fw / (float)fh;
+        ::Vector3f toTarget(loaded.camTarget.x - loaded.camOrigin.x,
+                            loaded.camTarget.y - loaded.camOrigin.y,
+                            loaded.camTarget.z - loaded.camOrigin.z);
+        float loadedFocusDistance = toTarget.length();
+        if (loadedFocusDistance > 0.f)
+            m_currentFocusDistance = loadedFocusDistance;
 
         m_camera.init(loaded.camOrigin, loaded.camTarget, loaded.camUp,
-                                    loaded.camFov, currentAspect);
+                                    loaded.camFov, currentAspect,
+                                    m_currentFocusDistance,
+                                    m_currentApertureRadius);
         m_currentFov = loaded.camFov;
         if (m_fovSlider)
             m_fovSlider->setValue(fovToSlider(m_currentFov));
+        if (m_focusSlider)
+            m_focusSlider->setValue(focusDistanceToSlider(m_currentFocusDistance));
+        if (m_apertureSlider)
+            m_apertureSlider->setValue(apertureToSlider(m_currentApertureRadius));
         m_camPos =
                 ::Vector3f(loaded.camOrigin.x, loaded.camOrigin.y, loaded.camOrigin.z);
         ::Vector3f fwd(loaded.camTarget.x - loaded.camOrigin.x,
@@ -342,7 +502,9 @@ void FutabaScreen::renderLoop() {
 
         launch_render(d_pbo_ptr, m_film, m_renderWidth, m_renderHeight, m_camera,
                                     m_scene, m_maxDepth, m_rrDepth, m_integratorMode,
-                                    m_useAntialiasing);
+                                    m_tonemappingMode, m_useAntialiasing, m_phongLightDir,
+                                    m_phongAmbient, m_phongDiffuse, m_phongSpecular,
+                                    m_phongShininess);
 
         cudaGraphicsUnmapResources(1, &m_cudaPboResource, 0);
 
@@ -502,7 +664,8 @@ void FutabaScreen::updateCamera() {
     Point3f target(m_camPos.x + m_camForward.x, m_camPos.y + m_camForward.y,
                                  m_camPos.z + m_camForward.z);
 
-    m_camera.init(pos, target, m_camUp, m_currentFov, aspect);
+    m_camera.init(pos, target, m_camUp, m_currentFov, aspect,
+                  m_currentFocusDistance, m_currentApertureRadius);
     m_film->clear();
 }
 

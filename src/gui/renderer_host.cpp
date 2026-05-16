@@ -208,7 +208,10 @@ static OptixPipelineManager g_pipeline;
 void launch_render(uchar4 *d_buffer, HDRFilm *film, int width, int height,
                    const PerspectiveCamera &camera, const Scene &scene,
                    int max_depth, int rr_depth, int integrator_mode,
-                   bool use_antialiasing) {
+                   int tonemapping_mode, bool use_antialiasing,
+                   const ::Vector3f &phong_light_dir,
+                   float phong_ambient, float phong_diffuse,
+                   float phong_specular, float phong_shininess) {
   g_pipeline.init();
 
   film->sampleCount++;
@@ -224,7 +227,13 @@ void launch_render(uchar4 *d_buffer, HDRFilm *film, int width, int height,
   params.max_depth = max_depth;
   params.rr_depth = rr_depth;
   params.integrator_mode = integrator_mode;
+  params.tonemapping_mode = tonemapping_mode;
   params.use_antialiasing = use_antialiasing;
+  params.phong_light_dir = phong_light_dir;
+  params.phong_ambient = phong_ambient;
+  params.phong_diffuse = phong_diffuse;
+  params.phong_specular = phong_specular;
+  params.phong_shininess = phong_shininess;
 
   cudaMemcpy(reinterpret_cast<void *>(g_pipeline.d_params), &params,
              sizeof(LaunchParams), cudaMemcpyHostToDevice);

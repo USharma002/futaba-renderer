@@ -86,6 +86,11 @@ struct Scene {
     BVH             bvh;
     bool            use_vertex_normals = false;
 
+    // Scene bounding box (host-side computed in setTriangles). Useful for
+    // scene-wide heuristics such as depth normalization.
+    Point3f         boundsMin = Point3f(1e30f, 1e30f, 1e30f);
+    Point3f         boundsMax = Point3f(-1e30f, -1e30f, -1e30f);
+
     // -----------------------------------------------------------------------
     // Intersection
     // -----------------------------------------------------------------------
@@ -100,7 +105,7 @@ struct Scene {
             float closest = t_max;
             for (uint32_t i = 0; i < triangleCount; ++i) {
                 SurfaceIntersection tmp;
-                if (triangles[i].intersect(ray, t_min, closest, tmp, use_vertex_normals)) {
+                if (triangles[i].intersect(ray, t_min, closest, tmp, use_vertex_normals, (int)i)) {
                     hit     = true;
                     closest = tmp.t;
                     rec     = tmp;
@@ -225,6 +230,21 @@ struct Scene {
         }
         triangleCount = count;
         if (triangleCount == 0) return;
+
+        // Compute host-side scene bounds for normalization heuristics.
+        Point3f minP(1e30f, 1e30f, 1e30f);
+        Point3f maxP(-1e30f, -1e30f, -1e30f);
+        for (uint32_t i = 0; i < triangleCount; ++i) {
+            const Triangle& t = hostTriangles[i];
+            minP.x = fminf(minP.x, fminf(t.p0.x, fminf(t.p1.x, t.p2.x)));
+            minP.y = fminf(minP.y, fminf(t.p0.y, fminf(t.p1.y, t.p2.y)));
+            minP.z = fminf(minP.z, fminf(t.p0.z, fminf(t.p1.z, t.p2.z)));
+            maxP.x = fmaxf(maxP.x, fmaxf(t.p0.x, fmaxf(t.p1.x, t.p2.x)));
+            maxP.y = fmaxf(maxP.y, fmaxf(t.p0.y, fmaxf(t.p1.y, t.p2.y)));
+            maxP.z = fmaxf(maxP.z, fmaxf(t.p0.z, fmaxf(t.p1.z, t.p2.z)));
+        }
+        boundsMin = minP;
+        boundsMax = maxP;
 
         CUDA_CHECK(cudaMalloc(&triangles, triangleCount * sizeof(Triangle)));
         CUDA_CHECK(cudaMemcpy(triangles, hostTriangles,

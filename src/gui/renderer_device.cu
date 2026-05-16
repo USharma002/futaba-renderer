@@ -1,8 +1,14 @@
 #include "common.cuh"
 #include "heatmap.cuh"
+#include "albedo.cuh"
+#include "phong.cuh"
+#include "depth.cuh"
+#include "primitives.cuh"
 #include "launch_params.h"
 #include "normals.cuh"
 #include "path.cuh"
+#include "volpath.cuh"
+#include "tonemapping.cuh"
 #include "perspective.cuh"
 #include "scene.cuh"
 #include "types.cuh"
@@ -34,7 +40,7 @@ extern "C" __global__ void __raygen__render() {
   float u = (float)(idx.x + jx) / (float)params.width;
   float v = (float)(idx.y + jy) / (float)params.height;
 
-  Ray3f ray = params.camera.sampleRay(u, v);
+  Ray3f ray = params.camera.sampleRay(u, v, sampler);
 
   // Select correct integrator based on mode in GUI
   Color3f radiance;
@@ -44,6 +50,23 @@ extern "C" __global__ void __raygen__render() {
   } else if (params.integrator_mode == INTEGRATOR_HEATMAP) {
     Heatmap heatmap;
     radiance = heatmap.sample(ray, params.scene, sampler);
+  } else if (params.integrator_mode == INTEGRATOR_ALBEDO) {
+    Albedo albedo;
+    radiance = albedo.sample(ray, params.scene, sampler);
+  } else if (params.integrator_mode == INTEGRATOR_DEPTH) {
+    Depth depth;
+    radiance = depth.sample(ray, params.scene, sampler);
+  } else if (params.integrator_mode == INTEGRATOR_PHONG) {
+    Phong phong(params.phong_light_dir, params.phong_ambient,
+                params.phong_diffuse, params.phong_specular,
+                params.phong_shininess);
+    radiance = phong.sample(ray, params.scene, sampler);
+  } else if (params.integrator_mode == INTEGRATOR_PRIMITIVES) {
+    Primitives primitives;
+    radiance = primitives.sample(ray, params.scene, sampler);
+  } else if (params.integrator_mode == INTEGRATOR_VOLPATH) {
+    VolumetricPath integrator(params.max_depth, params.rr_depth, false);
+    radiance = integrator.sample(ray, params.scene, sampler);
   } else {
     Path integrator(params.max_depth, params.rr_depth);
     radiance = integrator.sample(ray, params.scene, sampler);
@@ -53,7 +76,9 @@ extern "C" __global__ void __raygen__render() {
   acc += radiance;
   params.film_pixels[index] = acc;
 
-  Color3f final_color = toSRGB(acc / (float)params.sampleCount);
+  Color3f linear_avg = acc / (float)params.sampleCount;
+  Color3f tonemapped = tonemap::apply(linear_avg, params.tonemapping_mode);
+  Color3f final_color = toSRGB(tonemapped);
 
   params.pbo_ptr[index].x =
       (unsigned char)clamp(final_color.x * 255.f, 0.f, 255.f);
@@ -85,7 +110,7 @@ extern "C" __global__ void __closesthit__ch() {
   // Since OptiX reported a hit, we know it intersects. We pass bounds that
   // ensure Triangle::intersect completes successfully.
   tri.intersect(ray, 0.0f, optixGetRayTmax() + 0.001f, *rec,
-                params.scene.use_vertex_normals);
+                params.scene.use_vertex_normals, (int)primIdx);
 }
 
 extern "C" __global__ void __miss__ms() {

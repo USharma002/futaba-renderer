@@ -41,6 +41,7 @@ struct SurfaceIntersection {
     Point2f  uv;
     int      shape_id;
     int      material_id;
+    int      primitive_id;
 
     // Shading frame (built from normal at intersection)
     Frame frame;
@@ -49,7 +50,7 @@ struct SurfaceIntersection {
                 : t(INFINITY), p(0.f), n(0.f), front_face(true),
                     albedo(0.f), specular(1.f), emission(0.f), conductor_eta(0.f), conductor_k(1.f),
                     ext_ior(1.000277f), ior(1.5f), alpha(1.f), is_conductor(false), mat_type(BSDF_ID_DIFFUSE),
-          shape_id(-1), material_id(-1), frame() {}
+          shape_id(-1), material_id(-1), primitive_id(-1), frame() {}
 
     HD bool is_valid() const { return isfinite(t); }
 

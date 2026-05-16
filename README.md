@@ -4,6 +4,16 @@ Futaba is a high-performance, learning-oriented physically-based renderer writte
 
 ![Renderer Preview](assets/dragon-cbox.png)
 
+## Available Visualizations
+
+| Path Tracing | Albedo | Normals |
+|:---:|:---:|:---:|
+| ![Path Tracing](assets/modes/chess-path.png) | ![Albedo](assets/modes/chess-albedo.png) | ![Normals](assets/modes/chess-normals.png) |
+| **Depth** | **Heatmap** | **Phong** |
+| ![Depth](assets/modes/chess-depth.png) | ![Heatmap](assets/modes/chess-heatmap.png) | ![Phong](assets/modes/chess-phong.png) |
+| **Primitives** | | |
+| ![Primitives](assets/modes/chess-primitives.png) | | |
+
 ## Project Goals
 
 - **Educational**: Understand the internals of physically-based rendering (PBR) from first principles.

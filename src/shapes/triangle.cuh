@@ -22,13 +22,11 @@ struct Triangle {
     int mesh_id = -1;
     bool has_normals = false;
 
-    Diffuse bsdf;
 
-    HD bool intersect(const Ray& r, float t_min, float t_max, SurfaceIntersection& rec, bool use_vertex_normals) const {
+    HD bool intersect(const Ray& r, float t_min, float t_max, SurfaceIntersection& rec, bool use_vertex_normals, int primitive_id = -1) const {
         // Möller–Trumbore ray-triangle intersection algorithm
         Vector3f edge1 = p1 - p0;
         Vector3f edge2 = p2 - p0;
-
 
         Vector3f pvec = cross(r.d, edge2);
 
@@ -66,9 +64,10 @@ struct Triangle {
         rec.wi = -r.d;
         rec.shape_id = mesh_id;
         rec.material_id = material_id;
-        rec.albedo = bsdf.albedo;
+        rec.primitive_id = primitive_id;
         
         rec.front_face = dot(r.d, face_n) < 0.0f;
+        rec.uv = Point2f(u, v);
         Vector3f frame_n = rec.front_face ? rec.n : -rec.n;
         rec.set_frame_from_normal(frame_n);
 

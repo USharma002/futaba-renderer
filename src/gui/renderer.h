@@ -12,7 +12,10 @@
 void launch_render(uchar4 *d_buffer, futaba::HDRFilm *film, int width,
                    int height, const futaba::PerspectiveCamera &camera,
                    const futaba::Scene &scene, int max_depth, int rr_depth,
-                   int integrator_mode, bool use_antialiasing);
+                   int integrator_mode, int tonemapping_mode, bool use_antialiasing,
+                   const ::Vector3f &phong_light_dir,
+                   float phong_ambient, float phong_diffuse,
+                   float phong_specular, float phong_shininess);
 
 // Build the built-in Cornell-box fallback into an existing Scene.
 void buildCornellBox(futaba::Scene &scene);
