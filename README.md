@@ -57,10 +57,7 @@ Futaba is a high-performance, learning-oriented physically-based renderer writte
 
 #### Denoising Demo
 
-<video controls autoplay muted loop playsinline width="100%">
-  <source src="assets/optix_denoiser.mp4" type="video/mp4">
-  Your browser does not support embedded video. You can view the clip at [assets/optix_denoiser.mp4](assets/optix_denoiser.mp4).
-</video>
+![Optix Denoiser Preview](assets/optix_denoiser.gif)
 
 ### Roadmap
 - [x] Done
