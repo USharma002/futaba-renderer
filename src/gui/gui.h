@@ -7,6 +7,8 @@
 #include "renderer.h"
 #include "scene.cuh"
 #include "scene_loader.h"
+#include "denoiser.h"
+#include "guiding.h"
 
 namespace futaba {
 class HDRFilm;
@@ -53,8 +55,13 @@ private:
   int m_rrDepth = 5;
   int m_integratorMode = futaba::INTEGRATOR_PATH;
   int m_tonemappingMode = futaba::TONEMAPPING_NONE;
+  int m_pathGuidingMode = futaba::PATH_GUIDING_NONE;
   bool m_useVertexNormals = true;
   bool m_useAntialiasing = true;
+  bool m_useNEE = true;
+  bool m_useDenoiser = false;
+  futaba::DenoiserManager m_denoiser;
+  futaba::GuidingManager m_guiding;
 
   GLuint m_glTex = 0;
   GLuint m_glPbo = 0;

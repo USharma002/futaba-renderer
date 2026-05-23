@@ -270,7 +270,7 @@ struct BVH {
                    OptixVisibilityMask(255),
                    OPTIX_RAY_FLAG_DISABLE_ANYHIT,
                    0,
-                   1,
+                   2,
                    0,
                    packed0,
                    packed1);
@@ -341,6 +341,34 @@ struct BVH {
 #endif
     }
 
+    // Shadow ray: returns true if any geometry occludes [tMin, tMax].
+    HD bool occluded(const Ray& ray, float tMin, float tMax,
+                     const Triangle* __restrict__ triangles = nullptr) const {
+#if defined(FUTABA_OPTIX_DEVICE_PROGRAMS) && FUTABA_USE_OPTIX
+        if (traversable == 0)
+            return false;
+
+        unsigned int hit = 0;
+        optixTrace(traversable,
+                   make_float3(ray.o.x, ray.o.y, ray.o.z),
+                   make_float3(ray.d.x, ray.d.y, ray.d.z),
+                   tMin,
+                   tMax,
+                   0.0f,
+                   OptixVisibilityMask(255),
+                   OPTIX_RAY_FLAG_TERMINATE_ON_FIRST_HIT | OPTIX_RAY_FLAG_DISABLE_CLOSESTHIT,
+                   1,  // SBT offset (shadow ray type)
+                   2,  // SBT stride (2 ray types)
+                   1,  // miss SBT index (shadow miss)
+                   hit);
+        return hit != 0;
+#else
+        // Software fallback: reuse full intersect with early-out
+        SurfaceIntersection tmp;
+        return intersect(ray, tMin, tMax, triangles, tmp, false);
+#endif
+    }
+
     HD int intersectAABBCount(const Ray& ray,
                               float tMin,
                               float tMax) const {
@@ -396,6 +424,8 @@ struct BVH {
 
         return aabb_tests;
     }
+
+    
 };
 
 } // namespace futaba

@@ -15,6 +15,12 @@ struct Dielectric {
     HD Dielectric() : albedo(1.f), intIOR(1.5f) {}
     HD Dielectric(const Color3f& tint, float ior) : albedo(tint), intIOR(ior) {}
 
+    // Delta BSDF: keep the interface uniform with the other BSDFs.
+    // The actual sampled transport is handled by sample(); eval/pdf are zero
+    // for explicit-light MIS and debugging consistency.
+    HD Color3f eval(const BSDFSample& /*bs*/) const { return Color3f(0.f); }
+    HD float   pdf (const BSDFSample& /*bs*/) const { return 0.f; }
+
     HD Color3f sample(BSDFSample& bs, const Point2f& s2) const {
         float etaI = bs.front_face ? 1.f : intIOR;
         float etaT = bs.front_face ? intIOR : 1.f;
@@ -24,7 +30,7 @@ struct Dielectric {
         // Reflect (also handles TIR via the Fr >= 1 branch)
         if (Fr >= 1.f - 1e-6f || s2.x < Fr) {
             bs.wo           = Vector3f(-bs.wi.x, -bs.wi.y, bs.wi.z);
-            bs.pdf          = fmaxf(Fr, 1e-6f);
+                bs.pdf          = fmaxf(Fr, 1e-6f);
             bs.weight       = albedo;
             bs.eta          = 1.f;
             bs.sampled_type = BSDF_ID_DIELECTRIC;
@@ -33,7 +39,7 @@ struct Dielectric {
 
         // Check for total internal reflection
         float eta       = etaI / etaT;
-        float sin2I     = fmaxf(0.f, 1.f - cosI * cosI);
+            float sin2I     = fmaxf(0.f, 1.f - cosI * cosI);
         float sin2T     = eta * eta * sin2I;
         if (sin2T >= 1.f) {
             bs.wo           = Vector3f(-bs.wi.x, -bs.wi.y, bs.wi.z);

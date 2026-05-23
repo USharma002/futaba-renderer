@@ -9,9 +9,6 @@ enum BSDFType {
     BSDF_ID_DIELECTRIC       = 1,
     BSDF_ID_MIRROR           = 2,
     BSDF_ID_MICROFACET       = 3,
-    BSDF_ID_ROUGHCONDUCTOR   = 4,
-    BSDF_ID_ROUGHPLASTIC     = 5,
-    BSDF_ID_ROUGHDIELECTRIC  = 6,
 };
 
 struct Material {

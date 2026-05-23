@@ -2,6 +2,7 @@
 #include "bitmap.h"
 #include "hdrfilm.cuh"
 #include "renderer.h"
+#include "distribution.cuh"
 #include "scene_loader.h"
 #include <filesystem>
 #include <functional>
@@ -141,10 +142,12 @@ FutabaScreen::FutabaScreen(int width, int height)
         m_film->clear();
     });
 
-        Button *btnSettings = new Button(window, "Settings");
+        Button *btnSettings = new Button(window, "Render Settings...");
         btnSettings->setCallback([this] {
-            if (m_settingsWindow)
+            if (m_settingsWindow) {
                 m_settingsWindow->setVisible(!m_settingsWindow->visible());
+                performLayout();
+            }
         });
 
         m_settingsWindow = new Window(this, "Rendering Settings");
@@ -152,12 +155,36 @@ FutabaScreen::FutabaScreen(int width, int height)
         m_settingsWindow->setLayout(new GroupLayout(10, 5, 5, 5));
         m_settingsWindow->setVisible(false);
 
-        new Label(m_settingsWindow, "Tonemapping", "sans-bold");
-        ComboBox *tonemmapCombo =
-                new ComboBox(m_settingsWindow, {"None", "ACES", "Reinhardt", "Filmic"});
+        Widget *settingsGrid = new Widget(m_settingsWindow);
+        settingsGrid->setLayout(new GridLayout(Orientation::Horizontal, 2, Alignment::Middle, 0, 8));
+
+        // 1. Tonemapping dropdown
+        new Label(settingsGrid, "Tonemapping", "sans-bold");
+        ComboBox *tonemmapCombo = new ComboBox(settingsGrid, {"None", "ACES", "Reinhardt", "Filmic"});
         tonemmapCombo->setSelectedIndex((int)m_tonemappingMode);
+        tonemmapCombo->setFixedWidth(130);
         tonemmapCombo->setCallback([this](int index) {
             m_tonemappingMode = index;
+            m_film->clear();
+        });
+
+        // 2. Denoiser dropdown (shifted from the main sidebar)
+        new Label(settingsGrid, "Denoiser", "sans-bold");
+        ComboBox *denoiserCombo = new ComboBox(settingsGrid, {"None", "OptiX Denoiser"});
+        denoiserCombo->setSelectedIndex(m_useDenoiser ? 1 : 0);
+        denoiserCombo->setFixedWidth(130);
+        denoiserCombo->setCallback([this](int index) {
+            m_useDenoiser = (index == 1);
+            m_film->clear();
+        });
+
+        // 3. Path Guiding dropdown (skeleton setup)
+        new Label(settingsGrid, "Path Guiding", "sans-bold");
+        ComboBox *guidingCombo = new ComboBox(settingsGrid, {"None", "SD-Tree (PPG)", "VMM (Mixture)"});
+        guidingCombo->setSelectedIndex((int)m_pathGuidingMode);
+        guidingCombo->setFixedWidth(130);
+        guidingCombo->setCallback([this](int index) {
+            m_pathGuidingMode = index;
             m_film->clear();
         });
 
@@ -212,6 +239,15 @@ FutabaScreen::FutabaScreen(int width, int height)
         m_film->clear();
     });
 
+    CheckBox *cbNee = new CheckBox(window, "Next Event Estimation");
+    cbNee->setChecked(m_useNEE);
+    cbNee->setCallback([this](bool checked) {
+        m_useNEE = checked;
+        m_scene.use_nee = checked;
+        m_film->clear();
+    });
+
+
     new Label(window, "FOV", "sans-bold");
     m_fovSlider = new Slider(window);
     m_fovSlider->setValue(fovToSlider(m_currentFov));
@@ -251,31 +287,30 @@ FutabaScreen::FutabaScreen(int width, int height)
     m_fpsLabel = new Label(window, "FPS: 0.0");
     m_fpsLabel->setFont("sans-bold");
 
-    new Label(window, "Depth", "sans-bold");
-    Widget *maxDepthPanel = new Widget(window);
-    maxDepthPanel->setLayout(
-            new BoxLayout(Orientation::Horizontal, Alignment::Middle, 0, 10));
-    Slider *maxDepthSlider = new Slider(maxDepthPanel);
-    maxDepthSlider->setValue(m_maxDepth / 32.f);
-    maxDepthSlider->setFixedWidth(100);
-    Label *maxDepthVal = new Label(maxDepthPanel, std::to_string(m_maxDepth));
-    maxDepthSlider->setCallback([this, maxDepthVal](float value) {
-        m_maxDepth = std::max(1, (int)(value * 32.f));
-        maxDepthVal->setCaption(std::to_string(m_maxDepth));
+    Widget *depthGridPanel = new Widget(window);
+    depthGridPanel->setLayout(new GridLayout(Orientation::Horizontal, 2, Alignment::Middle, 0, 6));
+
+    new Label(depthGridPanel, "Depth", "sans-bold");
+    IntBox<int> *depthBox = new IntBox<int>(depthGridPanel, m_maxDepth);
+    depthBox->setEditable(true);
+    depthBox->setSpinnable(true);
+    depthBox->setAlignment(TextBox::Alignment::Right);
+    depthBox->setMinMaxValues(1, 64);
+    depthBox->setFixedWidth(70);
+    depthBox->setCallback([this](int value) {
+        m_maxDepth = value;
         m_film->clear();
     });
 
-    new Label(window, "RR", "sans-bold");
-    Widget *rrDepthPanel = new Widget(window);
-    rrDepthPanel->setLayout(
-            new BoxLayout(Orientation::Horizontal, Alignment::Middle, 0, 10));
-    Slider *rrDepthSlider = new Slider(rrDepthPanel);
-    rrDepthSlider->setValue(m_rrDepth / 16.f);
-    rrDepthSlider->setFixedWidth(100);
-    Label *rrDepthVal = new Label(rrDepthPanel, std::to_string(m_rrDepth));
-    rrDepthSlider->setCallback([this, rrDepthVal](float value) {
-        m_rrDepth = std::max(1, (int)(value * 16.f));
-        rrDepthVal->setCaption(std::to_string(m_rrDepth));
+    new Label(depthGridPanel, "RR", "sans-bold");
+    IntBox<int> *rrBox = new IntBox<int>(depthGridPanel, m_rrDepth);
+    rrBox->setEditable(true);
+    rrBox->setSpinnable(true);
+    rrBox->setAlignment(TextBox::Alignment::Right);
+    rrBox->setMinMaxValues(1, 64);
+    rrBox->setFixedWidth(70);
+    rrBox->setCallback([this](int value) {
+        m_rrDepth = value;
         m_film->clear();
     });
 
@@ -296,6 +331,7 @@ FutabaScreen::FutabaScreen(int width, int height)
     // Load Cornell box as default scene
     buildCornellBox(m_scene);
     m_scene.use_vertex_normals = m_useVertexNormals;
+    m_scene.use_nee = m_useNEE;
 
     if (m_triCountLabel)
         m_triCountLabel->setCaption("Triangles: " +
@@ -303,6 +339,11 @@ FutabaScreen::FutabaScreen(int width, int height)
 
     // Ensure camera is fully initialized with correct aspect ratio and lens settings
     updateCamera();
+
+    // Initialize OptiX context early so we can initialize the denoiser manager
+    futaba::initOptix();
+    m_denoiser.init(futaba::getOptixContext(), m_renderWidth, m_renderHeight);
+    m_guiding.init(m_renderWidth, m_renderHeight);
 }
 
 FutabaScreen::~FutabaScreen() {
@@ -370,6 +411,72 @@ bool FutabaScreen::loadScene(const std::string &xmlPath) {
     }
     m_scene.setEmitters(emittersGPU.data(), (uint32_t)emittersGPU.size());
 
+    // Build emissive-triangle distribution (area * emission luminance)
+    std::vector<int> emissiveTriIndices;
+    std::vector<float> emissiveWeights;
+    emissiveTriIndices.reserve(loaded.triangles.size());
+    emissiveWeights.reserve(loaded.triangles.size());
+
+    auto luminance = [](const Color3f &c) {
+        return 0.2126f * c.x + 0.7152f * c.y + 0.0722f * c.z;
+    };
+
+    auto triangleEmission = [&](const Triangle &t) -> Color3f {
+        if (t.mesh_id >= 0 && t.mesh_id < (int)loaded.meshes.size()) {
+            const int emitterId = loaded.meshes[t.mesh_id].emitterId;
+            if (emitterId >= 0 && emitterId < (int)loaded.emitters.size()) {
+                return loaded.emitters[emitterId].radiance;
+            }
+        }
+
+        if (t.material_id >= 0 && t.material_id < (int)loaded.materials.size()) {
+            return loaded.materials[t.material_id].emission;
+        }
+
+        return Color3f(0.f);
+    };
+
+    for (size_t i = 0; i < loaded.triangles.size(); ++i) {
+        const Triangle &t = loaded.triangles[i];
+        float area = t.area();
+        Color3f emission = triangleEmission(t);
+        float w = area * luminance(emission);
+        if (w > 0.f) {
+            emissiveTriIndices.push_back((int)i);
+            emissiveWeights.push_back(w);
+        }
+    }
+
+    if (!emissiveWeights.empty()) {
+        futaba::Distribution1D dist;
+        dist.build(emissiveWeights);
+        // Build global->emissive index map
+        std::vector<int> globalToEmissive(loaded.triangles.size(), -1);
+        for (size_t i = 0; i < emissiveTriIndices.size(); ++i) {
+            int g = emissiveTriIndices[i];
+            if (g >= 0 && g < (int)globalToEmissive.size())
+                globalToEmissive[g] = (int)i;
+        }
+        // Upload cdf and index list to device (also provide global mapping)
+        m_scene.setEmitterTriangleDistribution(dist.cdfData(), (int)dist.cdf.size(), dist.funcSum, emissiveTriIndices.data(), (int)emissiveTriIndices.size(), globalToEmissive.data(), (int)globalToEmissive.size());
+    } else {
+        m_scene.setEmitterTriangleDistribution(nullptr, 0, 0.f, nullptr, 0, nullptr, 0);
+    }
+
+    // Upload non-area (point / directional) emitter indices for NEE sampling
+    {
+        std::vector<int> nonAreaIndices;
+        for (size_t i = 0; i < emittersGPU.size(); ++i) {
+            const uint32_t t = emittersGPU[i].type;
+            if (t == futaba::kEmitterTypePoint || t == futaba::kEmitterTypeDirectional)
+                nonAreaIndices.push_back((int)i);
+        }
+        if (!nonAreaIndices.empty())
+            m_scene.setNonAreaEmitters(nonAreaIndices.data(), (int)nonAreaIndices.size());
+        else
+            m_scene.setNonAreaEmitters(nullptr, 0);
+    }
+
     if (loaded.hasEnvMap) {
         m_scene.setEnvironmentMap(loaded.envMapPixels.data(),
                                   (uint32_t)loaded.envMapWidth,
@@ -382,6 +489,7 @@ bool FutabaScreen::loadScene(const std::string &xmlPath) {
     }
     
     m_scene.use_vertex_normals = m_useVertexNormals;
+    m_scene.use_nee = m_useNEE;
 
     if (loaded.hasCamera) {
         int fw, fh;
@@ -504,7 +612,8 @@ void FutabaScreen::renderLoop() {
                                     m_scene, m_maxDepth, m_rrDepth, m_integratorMode,
                                     m_tonemappingMode, m_useAntialiasing, m_phongLightDir,
                                     m_phongAmbient, m_phongDiffuse, m_phongSpecular,
-                                    m_phongShininess);
+                                    m_phongShininess, m_useDenoiser,
+                                    &m_denoiser, m_pathGuidingMode);
 
         cudaGraphicsUnmapResources(1, &m_cudaPboResource, 0);
 
@@ -653,6 +762,11 @@ void FutabaScreen::recreateRenderTargets(int width, int height) {
     if (m_film)
         delete m_film;
     m_film = new HDRFilm(width, height);
+
+    if (futaba::getOptixContext()) {
+        m_denoiser.resize(width, height);
+    }
+    m_guiding.resize(width, height);
 }
 
 void FutabaScreen::updateCamera() {

@@ -7,7 +7,12 @@
 
 namespace futaba {
 
-struct Triangle {
+struct Triangle {    
+    // Material and shape IDs for intersection record
+    int material_id;          // Material ID (4 bytes)
+    int mesh_id = -1;         // Mesh ID (4 bytes)
+    bool has_normals = false; // Whether the triangle has vertex normals (1 byte, but will be padded to 4 bytes)
+
     // Triangle vertices and normals in world space
     Point3f p0;
     Point3f p1;
@@ -16,11 +21,6 @@ struct Triangle {
     Vector3f n0;
     Vector3f n1;
     Vector3f n2;
-
-    // Material and shape IDs for intersection record
-    int material_id;
-    int mesh_id = -1;
-    bool has_normals = false;
 
 
     HD bool intersect(const Ray& r, float t_min, float t_max, SurfaceIntersection& rec, bool use_vertex_normals, int primitive_id = -1) const {
@@ -53,6 +53,7 @@ struct Triangle {
         rec.t = t;
         rec.p = r(rec.t);
         
+        // fill the record
         Vector3f face_n = normalize(cross(edge1, edge2));
         if (has_normals && use_vertex_normals) {
             float w = 1.0f - u - v;
@@ -74,10 +75,12 @@ struct Triangle {
         return true;
     }
 
+    // Compute the area of the triangle (used for importance sampling)
     HD float area() const {
         return 0.5f * length(cross(p1 - p0, p2 - p0));
     }
 
+    // Uniformly sample a point on the triangle's surface using barycentric coordinates
     HD Point3f sampleSurface(const Point2f& s) const {
         float sqrt_u = sqrtf(s.x);
         float u = 1.0f - sqrt_u;
@@ -85,6 +88,7 @@ struct Triangle {
         return p0 + u * (p1 - p0) + v * (p2 - p0);
     }
 
+    // PDF for uniform sampling on the triangle's surface
     HD float pdfSurface() const {
         return 1.0f / area();
     }

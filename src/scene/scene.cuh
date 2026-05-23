@@ -8,6 +8,7 @@
 #include "material.cuh"
 #include "bvh.cuh"
 #include "envmap.cuh"
+#include "distribution.cuh"
 
 namespace futaba {
 
@@ -52,44 +53,38 @@ enum EmitterFlags : uint32_t {
     EMITTER_FLAG_TWO_SIDED = 1u << 0,
 };
 
-// Minimal direction-sample record for NEE APIs.
-struct EmitterDirectionSample {
-    Point3f  p;          // Sampled position on / representing the emitter
-    Vector3f d;          // Normalised direction from shading point to emitter
-    float    dist;       // Distance to the sampled point (large value for directional)
-    float    pdf;        // Directional PDF at the shading point
-    bool     delta;      // True for delta emitters (point, directional)
-    int      emitterId;  // Index of the sampled emitter
-
-    HD EmitterDirectionSample()
-        : p(0.f), d(0.f), dist(0.f), pdf(0.f), delta(false), emitterId(-1) {}
-};
 
 // ---------------------------------------------------------------------------
 // Scene
 // ---------------------------------------------------------------------------
 struct Scene {
     Triangle*       triangles    = nullptr;
-    uint32_t        triangleCount = 0;
-
     Material*       materials    = nullptr;
-    uint32_t        materialCount = 0;
-
     MeshInstanceGPU* meshes      = nullptr;
-    uint32_t        meshCount    = 0;
-
     EmitterGPU*     emitters     = nullptr;
-    uint32_t        emitterCount = 0;
+
+    float*          emitterTriangleCdf = nullptr;
+    int*            emissiveTriangleIndices = nullptr; // maps cdf index -> global triangle index
+    int*            emissiveGlobalToIndex = nullptr; // maps global triangle idx -> emissive array idx or -1
+    int*            nonAreaEmitterIndices = nullptr; // device array of indices into emitters[]
 
     EnvironmentMapEmitter envMap;
 
     BVH             bvh;
-    bool            use_vertex_normals = false;
 
-    // Scene bounding box (host-side computed in setTriangles). Useful for
-    // scene-wide heuristics such as depth normalization.
+    uint32_t        triangleCount = 0;
+    uint32_t        materialCount = 0;
+    uint32_t        meshCount    = 0;
+    uint32_t        emitterCount = 0;
+    int             emissiveTriCount = 0;
+    int             nonAreaEmitterCount = 0;
+    float           emitterTriangleFuncSum = 0.f; // sum of weights (area * intensity)
+
     Point3f         boundsMin = Point3f(1e30f, 1e30f, 1e30f);
     Point3f         boundsMax = Point3f(-1e30f, -1e30f, -1e30f);
+
+    bool            use_vertex_normals = false;
+    bool            use_nee = true;
 
     // -----------------------------------------------------------------------
     // Intersection
@@ -128,6 +123,17 @@ struct Scene {
         }
 
         return hit;
+    }
+
+    HD bool occluded(const Ray& ray, float t_min, float t_max) const {
+        if (bvh.nodeCount > 0)
+            return bvh.occluded(ray, t_min, t_max);
+        for (uint32_t i = 0; i < triangleCount; ++i) {
+            SurfaceIntersection tmp;
+            if (triangles[i].intersect(ray, t_min, t_max, tmp, false, (int)i))
+                return true;
+        }
+        return false;
     }
 
     HD int intersectAABBCount(const Ray& ray, float t_min, float t_max) const {
@@ -182,41 +188,66 @@ struct Scene {
         return envMap.eval(dirWorld);
     }
 
-    // -----------------------------------------------------------------------
-    // NEE / direct-lighting API stubs (to be implemented).
-    // -----------------------------------------------------------------------
-    HD bool sample_emitter_direction(const SurfaceIntersection& /*si*/,
-                                     const Point2f&              sample,
-                                     EmitterDirectionSample&     ds,
-                                     Color3f&                    weight) const
+    void setEmitterTriangleDistribution(const float* hostCdf,
+                                        int cdfCount,
+                                        float funcSum,
+                                        const int* hostEmissiveTriangleIndices,
+                                        int emissiveCount,
+                                        const int* hostEmissiveGlobalToIndex,
+                                        int globalToIndexCount)
     {
-        if (!envMap.isActive()) {
-            ds     = EmitterDirectionSample();
-            weight = Color3f(0.f);
-            return false;
+        if (emitterTriangleCdf != nullptr) {
+            CUDA_CHECK(cudaFree(emitterTriangleCdf));
+            emitterTriangleCdf = nullptr;
+        }
+        if (emissiveTriangleIndices != nullptr) {
+            CUDA_CHECK(cudaFree(emissiveTriangleIndices));
+            emissiveTriangleIndices = nullptr;
+        }
+        if (emissiveGlobalToIndex != nullptr) {
+            CUDA_CHECK(cudaFree(emissiveGlobalToIndex));
+            emissiveGlobalToIndex = nullptr;
         }
 
-        ds.p = Point3f(0.f, 0.f, 0.f);
-        ds.d = envMap.sampleDirection(sample);
-        ds.delta = false;
-        ds.dist = 1e30f;
-        ds.emitterId = -1;
+        emissiveTriCount = emissiveCount;
+        emitterTriangleFuncSum = funcSum;
 
-        ds.pdf = envMap.pdf(ds.d);
-        weight = envMap.eval(ds.d) * (4.f * M_PI);
-        return true;
+        if (cdfCount > 0 && hostCdf != nullptr) {
+            CUDA_CHECK(cudaMalloc(&emitterTriangleCdf, (size_t)cdfCount * sizeof(float)));
+            CUDA_CHECK(cudaMemcpy(emitterTriangleCdf, hostCdf,
+                                  (size_t)cdfCount * sizeof(float),
+                                  cudaMemcpyHostToDevice));
+        }
+
+        if (emissiveCount > 0 && hostEmissiveTriangleIndices != nullptr) {
+            CUDA_CHECK(cudaMalloc(&emissiveTriangleIndices, (size_t)emissiveCount * sizeof(int)));
+            CUDA_CHECK(cudaMemcpy(emissiveTriangleIndices, hostEmissiveTriangleIndices,
+                                  (size_t)emissiveCount * sizeof(int),
+                                  cudaMemcpyHostToDevice));
+        }
+
+        if (globalToIndexCount > 0 && hostEmissiveGlobalToIndex != nullptr) {
+            CUDA_CHECK(cudaMalloc(&emissiveGlobalToIndex, (size_t)globalToIndexCount * sizeof(int)));
+            CUDA_CHECK(cudaMemcpy(emissiveGlobalToIndex, hostEmissiveGlobalToIndex,
+                                  (size_t)globalToIndexCount * sizeof(int),
+                                  cudaMemcpyHostToDevice));
+        }
     }
 
-    HD float pdf_emitter_direction(const SurfaceIntersection&    /*si*/,
-                                   const EmitterDirectionSample& /*ds*/) const
-    {
-        return envMap.isActive() ? 1.f / (4.f * M_PI) : 0.f;
-    }
+    void setNonAreaEmitters(const int* hostEmitterIndices, int count) {
+        if (nonAreaEmitterIndices != nullptr) {
+            CUDA_CHECK(cudaFree(nonAreaEmitterIndices));
+            nonAreaEmitterIndices = nullptr;
+        }
 
-    HD Color3f eval_emitter_direction(const SurfaceIntersection&    /*si*/,
-                                      const EmitterDirectionSample& ds) const
-    {
-        return envMap.eval(ds.d);
+        nonAreaEmitterCount = count;
+        if (count <= 0 || hostEmitterIndices == nullptr)
+            return;
+
+        CUDA_CHECK(cudaMalloc(&nonAreaEmitterIndices, (size_t)count * sizeof(int)));
+        CUDA_CHECK(cudaMemcpy(nonAreaEmitterIndices, hostEmitterIndices,
+                              (size_t)count * sizeof(int),
+                              cudaMemcpyHostToDevice));
     }
 
     // -----------------------------------------------------------------------
@@ -317,6 +348,15 @@ struct Scene {
 
         if (emitters != nullptr) { CUDA_CHECK(cudaFree(emitters)); emitters = nullptr; }
         emitterCount = 0;
+
+        if (emitterTriangleCdf != nullptr) { CUDA_CHECK(cudaFree(emitterTriangleCdf)); emitterTriangleCdf = nullptr; }
+        if (emissiveTriangleIndices != nullptr) { CUDA_CHECK(cudaFree(emissiveTriangleIndices)); emissiveTriangleIndices = nullptr; }
+        if (emissiveGlobalToIndex != nullptr) { CUDA_CHECK(cudaFree(emissiveGlobalToIndex)); emissiveGlobalToIndex = nullptr; }
+        if (nonAreaEmitterIndices != nullptr) { CUDA_CHECK(cudaFree(nonAreaEmitterIndices)); nonAreaEmitterIndices = nullptr; }
+
+        emissiveTriCount = 0;
+        nonAreaEmitterCount = 0;
+        emitterTriangleFuncSum = 0.f;
 
         envMap.clear();
     }

@@ -21,13 +21,13 @@ struct Heatmap {
                       Sampler& /*sampler*/) const
     {
         const int   aabb_tests = scene.intersectAABBCount(ray, ray.mint, ray.maxt);
-        const float normalized = fminf((float)aabb_tests / (float)kMaxAABBTests, 1.f);
+        const float normalized = clamp((float)aabb_tests / (float)kMaxAABBTests, 0.f, 1.f);
         return custom_colormap(normalized);
     }
 
 private:
     HD Color3f custom_colormap(float t) const {
-        t = fmaxf(0.f, fminf(1.f, t));
+        t = clamp(t, 0.f, 1.f);
 
         if (t < 0.25f) {
             const float u = t / 0.25f;

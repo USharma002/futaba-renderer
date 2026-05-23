@@ -76,6 +76,27 @@ struct Warp {
         return cos_theta * INV_PI;
     }
 
+    // Map uniform square [0,1]^2 to a concentric disk (Shirley). Produces better
+    // stratification for low-discrepancy sequences than the simple polar mapping.
+    HD static Point2f squareToConcentricDisk(const Point2f &u) {
+        // Remap to [-1,1]^2
+        float a = 2.0f * clamp(u.x, 0.0f, 1.0f) - 1.0f;
+        float b = 2.0f * clamp(u.y, 0.0f, 1.0f) - 1.0f;
+        if (a == 0.0f && b == 0.0f)
+            return Point2f(0.0f, 0.0f);
+
+        float r, theta;
+        if (fabsf(a) > fabsf(b)) {
+            r = a;
+            theta = (M_PI / 4.0f) * (b / a);
+        } else {
+            r = b;
+            theta = (M_PI / 2.0f) - (M_PI / 4.0f) * (a / b);
+        }
+
+        return Point2f(r * cosf(theta), r * sinf(theta));
+    }
+
     // Beckmann normal distribution function D(wh).
     HD static float beckmannD(const Vector3f& wh, float alpha) {
         const float cosThetaH = futaba::Frame::cos_theta(wh);

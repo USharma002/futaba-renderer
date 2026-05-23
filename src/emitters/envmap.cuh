@@ -47,7 +47,7 @@ struct EnvironmentMapEmitter {
         const float phi = atan2f(d.y, d.x);
         float u = phi / (2.f * M_PI);
         if (u < 0.f) u += 1.f;
-        const float v = acosf(fmaxf(-1.f, fminf(1.f, d.z))) / M_PI;
+        const float v = acosf(clamp(d.z, -1.f, 1.f)) / M_PI;
 
         const float x = u * (float)width  - 0.5f;
         const float y = v * (float)height - 0.5f;
@@ -66,8 +66,9 @@ struct EnvironmentMapEmitter {
 
         const int x00 = wrap_x(x0);
         const int x10 = wrap_x(x0 + 1);
-        const int y00 = (int)fminf(fmaxf(y0, 0), (int)height - 1);
-        const int y10 = (int)fminf(fmaxf(y0 + 1, 0), (int)height - 1);
+        const int max_y = (int)height - 1;
+        const int y00 = (y0 < 0) ? 0 : ((y0 > max_y) ? max_y : y0);
+        const int y10 = ((y0 + 1) < 0) ? 0 : (((y0 + 1) > max_y) ? max_y : (y0 + 1));
 
         const Color3f c00 = pixels[y00 * width + x00];
         const Color3f c10 = pixels[y00 * width + x10];

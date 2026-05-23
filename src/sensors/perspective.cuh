@@ -10,13 +10,14 @@ namespace futaba {
 
 class PerspectiveCamera {
 public:
-    Point3f  position;
+    Point3f  position; // Camera position in world space. (12 bytes)
 
     // Precomputed orthonormal axes (world space).
     // Invariant: right, trueUp, forward are always mutually orthogonal unit vectors.
-    Vector3f forward;
-    Vector3f right;
-    Vector3f trueUp;
+    
+    Vector3f forward; // Forward direction (12 bytes)
+    Vector3f right;   // Right direction (12 bytes)
+    Vector3f trueUp;  // True up direction (12 bytes)
 
     // Precomputed FOV values
     float fovY;
@@ -91,9 +92,7 @@ public:
         return Ray3f(lensOrigin, dir);
     }
 
-    // -----------------------------------------------------------------------
     // Helpers - each one rebuilds the full frame so the invariant is preserved.
-    // -----------------------------------------------------------------------
 
     // Change FOV; does not affect the viewing direction or axes.
     HD void setFov(float newFovY) {

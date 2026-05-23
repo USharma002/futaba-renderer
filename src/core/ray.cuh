@@ -15,11 +15,11 @@ struct Ray3f {
   float maxt;    // Maximum position on the ray segment
 
   // Construct a new empty ray
-  HD Ray3f() : mint(Epsilon), maxt(INFINITY) {}
+  HD Ray3f() : mint(Epsilon), maxt(Infinity) {}
 
   // Construct a new ray with origin and direction
   HD Ray3f(const Point3f &o, const Vector3f &d)
-      : o(o), d(normalize(d)), mint(Epsilon), maxt(INFINITY) {
+      : o(o), d(normalize(d)), mint(Epsilon), maxt(Infinity) {
     update();
   }
 

@@ -47,22 +47,32 @@ Futaba is a high-performance, learning-oriented physically-based renderer writte
 - [x] **Integrators**: 
   - [x] **Path Tracing**: Full Monte Carlo integration with Russian Roulette.
     ![Path Tracing](assets/dragon-cbox.png)
+  - [x] **Next Event Estimation**: Direct-lighting support for emissive geometry and environment lighting.
   - [x] **Normals**: Surface normal visualization for debugging.
     ![Surface Normals](assets/dragon-cbox-normals.png)
   - [x] **Heatmap**: AABB intersection complexity visualization.
     ![Intersection Heatmap](assets/dragon-cbox-heatmap.png)
 - [x] **Films**: 32-bit HDR accumulation with zero-copy OpenGL PBO display and EXR export support.
+- [x] **Denoising**: Optional OptiX AI denoiser with albedo/normal guide buffers and tonemapped output.
 
-### Planned Features
+#### Denoising Demo
+
+<video controls autoplay muted loop playsinline width="100%">
+  <source src="assets/optix_denoiser.mp4" type="video/mp4">
+  Your browser does not support embedded video. You can view the clip at [assets/optix_denoiser.mp4](assets/optix_denoiser.mp4).
+</video>
+
+### Roadmap
 - [x] Done
-  - [x] Normal Visualization
+  - [x] Normal visualization
   - [x] Path tracing
+  - [x] Next Event Estimation (NEE)
+  - [x] OptiX denoising
 - [~] Partially done
-  - [~] Various Materials
-  - [~] Textures and Environment map support
+  - [~] Materials
+  - [~] Textures and environment map support
+  - [~] Multiple Importance Sampling (MIS)
 - [ ] Not started
-  - [ ] Next Event Estimation (NEE)
-  - [ ] Multiple Importance Sampling (MIS)
   - [ ] Path Guiding (PPG, SDMM, NPM etc.)
   - [ ] Bidirectional Path Tracing
   - [ ] Photon Mapping
@@ -201,6 +211,7 @@ FILM -.->|Display Texture| FS
 
 ### Prerequisites
 - **CUDA Toolkit**
+- **NVIDIA OptiX SDK** (for OptiX acceleration and the AI denoiser)
 - **CMake** (3.15+)
 - **C++17** compatible compiler (MSVC 2019+, GCC, or Clang)
 

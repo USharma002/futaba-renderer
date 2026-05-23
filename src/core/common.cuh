@@ -1,9 +1,13 @@
 #pragma once
 
 #include "types.cuh"
-#include<cmath>
+#include <cmath>
+#include <limits>
 
 namespace futaba {
+
+constexpr float Infinity = std::numeric_limits<float>::infinity();
+
 
 // -----------------------------------------------------------------------------
 // CONSTANTS (From Nori's common.h)
@@ -70,17 +74,6 @@ HD Color3f toSRGB(const Color3f& c) {
 // GEOMETRY UTILS
 // -----------------------------------------------------------------------------
 
-// Complete a vector 'a' to form an orthonormal basis (a, b, c)
-HD void coordinateSystem(const Vector3f& a, Vector3f& b, Vector3f& c) {
-    if (fabsf(a.x) > fabsf(a.y)) {
-        float invLen = FAST_RSQRT(a.x * a.x + a.z * a.z);
-        c = Vector3f(a.z * invLen, 0.0f, -a.x * invLen);
-    } else {
-        float invLen = FAST_RSQRT(a.y * a.y + a.z * a.z);
-        c = Vector3f(0.0f, a.z * invLen, -a.y * invLen);
-    }
-    b = cross(c, a);
-}
 
 // Spherical to Cartesian coordinates
 HD Vector3f sphericalDirection(float theta, float phi) {

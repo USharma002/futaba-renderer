@@ -5,16 +5,25 @@
 namespace futaba {
 
 struct Sphere {
-    Point3f center;
-    float radius;
-    int material_id;
-
+    float radius; // Radius of the sphere (4 bytes)
+    int material_id = -1; // Material ID (4 bytes)
+    Point3f center; // Center of the sphere (12 bytes)
+    
     HD bool intersect(const Ray& r, float t_min, float t_max, SurfaceIntersection& rec) const {
+        // q = o - c
         Vector3f oc = r.o - center;
+
+        // || p(t) - c ||^2 = r^2
+        // solve this quadratic equation for t
+
         float a = dot(r.d, r.d);
         float b = 2.0f * dot(oc, r.d);
         float c = dot(oc, oc) - radius * radius;
         float discriminant = b * b - 4.0f * a * c;
+
+        // h = 0 => 1 intersection (tangent)
+        // h < 0 => no intersection
+        // h > 0 => 2 intersections (entering and exiting)
 
         if (discriminant < 0.0f) return false;
 

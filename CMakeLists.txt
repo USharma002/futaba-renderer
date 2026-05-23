@@ -25,6 +25,12 @@ add_executable(app
     src/parser/scene_loader.cpp 
     ext/pugixml/src/pugixml.cpp
     src/accel/optix_bvh.cu
+    src/denoiser/denoiser.cu
+    src/guiding/guiding.cpp
+)
+
+add_executable(struct_sizes
+    src/tests/test.cpp
 )
 
 find_path(OPTIX_INCLUDE_DIR optix.h
@@ -33,6 +39,7 @@ find_path(OPTIX_INCLUDE_DIR optix.h
 )
 if(OPTIX_INCLUDE_DIR)
     target_include_directories(app PRIVATE ${OPTIX_INCLUDE_DIR})
+    target_include_directories(struct_sizes PRIVATE ${OPTIX_INCLUDE_DIR})
 endif()
 
 # Force GLAD macro for Windows OpenGL
@@ -54,16 +61,20 @@ set(APP_INCLUDES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/bsdfs
     ${CMAKE_CURRENT_SOURCE_DIR}/src/emitters
     ${CMAKE_CURRENT_SOURCE_DIR}/src/materials
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/medium
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/denoiser
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/guiding
     ${CMAKE_CURRENT_SOURCE_DIR}/ext/nanogui/include
     ${CMAKE_CURRENT_SOURCE_DIR}/ext/pugixml/src
     ${CMAKE_CURRENT_SOURCE_DIR}/ext/tinyexr
     ${CMAKE_CURRENT_SOURCE_DIR}/ext/nanogui/ext/glad/include
     ${CMAKE_CURRENT_SOURCE_DIR}/ext/nanogui/ext/nanovg/src
     ${CMAKE_CURRENT_SOURCE_DIR}/ext/nanogui/ext/glfw/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/ext/nanogui/ext/eigen
+    ${CMAKE_CURRENT_SOURCE_DIR}/ext/nanogui/ext/nanovg/example
 )
 
 target_include_directories(app PRIVATE ${APP_INCLUDES})
+target_include_directories(struct_sizes PRIVATE ${APP_INCLUDES})
 
 # Build renderer_device.cu as PTX
 set(PTX_OUTPUT_DIR "${CMAKE_BINARY_DIR}/ptx")
@@ -88,6 +99,7 @@ add_custom_command(
             -o "${PTX_FILE}"
     DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/gui/renderer_device.cu"
             "${CMAKE_CURRENT_SOURCE_DIR}/src/gui/launch_params.h"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/guiding/guiding.h"
             "${CMAKE_CURRENT_SOURCE_DIR}/src/integrator/heatmap.cuh"
             "${CMAKE_CURRENT_SOURCE_DIR}/src/accel/bvh.cuh"
             "${CMAKE_CURRENT_SOURCE_DIR}/src/scene/scene.cuh"
@@ -104,5 +116,9 @@ target_compile_definitions(app PRIVATE FUTABA_SOURCE_ROOT="${FUTABA_SOURCE_ROOT}
 # 4. Link NanoGUI AND the CUDA runtime
 target_link_libraries(app PRIVATE 
     nanogui 
+    CUDA::cudart
+)
+
+target_link_libraries(struct_sizes PRIVATE
     CUDA::cudart
 )

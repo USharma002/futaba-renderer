@@ -7,9 +7,6 @@
 #include "material.cuh"
 #include "microfacet.cuh"
 #include "mirror.cuh"
-#include "roughconductor.cuh"
-#include "roughdielectric.cuh"
-#include "roughplastic.cuh"
 #include "ray.cuh"
 #include "types.cuh"
 
@@ -20,19 +17,6 @@ struct SurfaceIntersection {
     float    t;
     Point3f  p;
     Normal3f n;
-    bool     front_face;
-
-    // Material data (copied from Material on hit)
-    Color3f  albedo;
-    Color3f  specular;
-    Color3f  emission;
-    Color3f  conductor_eta;
-    Color3f  conductor_k;
-    float    ext_ior;
-    float    ior;
-    float    alpha;
-    bool     is_conductor;
-    BSDFType mat_type;
 
     // Incoming world-space direction
     Vector3f wi;
@@ -42,15 +26,30 @@ struct SurfaceIntersection {
     int      shape_id;
     int      material_id;
     int      primitive_id;
+    BSDFType mat_type;
+
+    // Material data (copied from Material on hit)
+    float    ext_ior;
+    float    ior;
+    float    alpha;
+    Color3f  albedo;
+    Color3f  specular;
+    Color3f  emission;
+    Color3f  conductor_eta;
+    Color3f  conductor_k;
 
     // Shading frame (built from normal at intersection)
     Frame frame;
 
+    bool     front_face;
+    bool     is_conductor;
+
     HD SurfaceIntersection()
-                : t(INFINITY), p(0.f), n(0.f), front_face(true),
-                    albedo(0.f), specular(1.f), emission(0.f), conductor_eta(0.f), conductor_k(1.f),
-                    ext_ior(1.000277f), ior(1.5f), alpha(1.f), is_conductor(false), mat_type(BSDF_ID_DIFFUSE),
-          shape_id(-1), material_id(-1), primitive_id(-1), frame() {}
+        : t(Infinity), p(0.f), n(0.f), wi(0.f), uv(0.f),
+          shape_id(-1), material_id(-1), primitive_id(-1), mat_type(BSDF_ID_DIFFUSE),
+          ext_ior(1.000277f), ior(1.5f), alpha(1.f),
+          albedo(0.f), specular(1.f), emission(0.f), conductor_eta(0.f), conductor_k(1.f),
+          frame(), front_face(true), is_conductor(false) {}
 
     HD bool is_valid() const { return isfinite(t); }
 
@@ -61,6 +60,17 @@ struct SurfaceIntersection {
     HD Vector3f to_world(const Vector3f& v) const { return frame.to_world(v); }
     HD Vector3f to_local(const Vector3f& v) const { return frame.to_local(v); }
 
+    // -----------------------------------------------------------------------
+    // is_bsdf_delta()
+    // Returns true only for true Dirac-delta BSDFs: perfect mirror and smooth
+    // dielectric.  RoughDielectric has a continuous GGX lobe and must NOT be
+    // flagged as delta — doing so skips NEE at rough-glass surfaces entirely
+    // and assigns MIS weight 1 to post-glass hits that should be shared.
+    // -----------------------------------------------------------------------
+    HD bool is_bsdf_delta() const {
+        return mat_type == BSDF_ID_MIRROR || mat_type == BSDF_ID_DIELECTRIC;
+    }
+
     // Transforms wi into the local shading frame and stores front_face into bs
     // before the BSDF is evaluated. Must be called before any BSDF method.
     HD void prepare_bsdf(BSDFSample& bs) const {
@@ -69,29 +79,12 @@ struct SurfaceIntersection {
     }
 
     // Sample the BSDF at this surface point.
-    //
-    // Returns the importance weight  f(wi,wo) * |cos(wo)| / pdf,
-    // which is identical to bs.weight after this call.
-    // Use the return value (or bs.weight – they are the same object) to update
-    // the path throughput. Do NOT apply both.
     HD Color3f sample_bsdf(BSDFSample& bs, const Point2f& s2) const {
         prepare_bsdf(bs);
         switch (mat_type) {
             case BSDF_ID_MICROFACET: {
                 Microfacet bsdf(albedo, alpha, ext_ior, ior,
                                 is_conductor, conductor_eta, conductor_k, specular);
-                return bsdf.sample(bs, s2);
-            }
-            case BSDF_ID_ROUGHCONDUCTOR: {
-                RoughConductor bsdf(albedo, alpha, ext_ior, conductor_eta, conductor_k, specular);
-                return bsdf.sample(bs, s2);
-            }
-            case BSDF_ID_ROUGHPLASTIC: {
-                RoughPlastic bsdf(albedo, alpha, ext_ior, ior);
-                return bsdf.sample(bs, s2);
-            }
-            case BSDF_ID_ROUGHDIELECTRIC: {
-                RoughDielectric bsdf(albedo, alpha, ext_ior, ior);
                 return bsdf.sample(bs, s2);
             }
             case BSDF_ID_DIELECTRIC: {
@@ -109,15 +102,57 @@ struct SurfaceIntersection {
         }
     }
 
-    // Spawn an offset ray to avoid self-intersection.
+    // -----------------------------------------------------------------------
+    // eval_pdf_bsdf()
     //
-    // The offset is proportional to the intersection distance t so that it
-    // works correctly across scenes of wildly different scales (millimetres
-    // to kilometres). A lower-bound floor prevents zero offset at very close
-    // hits.
+    // Previously this called eval_bsdf_local() and pdf_bsdf_local() separately,
+    // each doing a full BSDF construction + switch dispatch.  For Microfacet
+    // this recomputed the half-vector, Fresnel and GGX terms twice per NEE call.
+    //
+    // Now we dispatch once and compute both f and pdf in a single BSDF object,
+    // sharing all intermediate values.
+    // -----------------------------------------------------------------------
+    HD void eval_pdf_bsdf(const Vector3f& wo_local,
+                           Color3f&        f_out,
+                           float&          pdf_out) const
+    {
+        BSDFSample bs;
+        bs.wi         = to_local(wi);
+        bs.front_face = front_face;
+        bs.wo         = wo_local;
+
+        switch (mat_type) {
+            case BSDF_ID_MICROFACET: {
+                Microfacet bsdf(albedo, alpha, ext_ior, ior,
+                                is_conductor, conductor_eta, conductor_k, specular);
+                f_out   = bsdf.eval(bs);
+                pdf_out = bsdf.pdf(bs);
+                return;
+            }
+            case BSDF_ID_DIELECTRIC: {
+                Dielectric bsdf(albedo, ior);
+                f_out   = bsdf.eval(bs);
+                pdf_out = bsdf.pdf(bs);
+                return;
+            }
+            case BSDF_ID_MIRROR: {
+                Mirror bsdf(albedo);
+                f_out   = bsdf.eval(bs);
+                pdf_out = bsdf.pdf(bs);
+                return;
+            }
+            default: {
+                Diffuse bsdf(albedo);
+                f_out   = bsdf.eval(bs);
+                pdf_out = bsdf.pdf(bs);
+                return;
+            }
+        }
+    }
+
+    // Spawn an offset ray to avoid self-intersection.
     HD Ray3f spawn_ray(const Vector3f& d) const {
         const float sign = (dot(d, n) >= 0.f) ? 1.f : -1.f;
-        // 1e-4 * t gives ~0.01% of the ray length; clamped to ≥1e-6 absolute.
         const float eps    = fmaxf(1e-4f * t, 1e-6f);
         const Vector3f off = Vector3f(n.x, n.y, n.z) * (eps * sign);
         return Ray3f(p + off, d);

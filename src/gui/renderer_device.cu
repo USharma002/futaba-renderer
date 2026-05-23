@@ -68,6 +68,12 @@ extern "C" __global__ void __raygen__render() {
     VolumetricPath integrator(params.max_depth, params.rr_depth, false);
     radiance = integrator.sample(ray, params.scene, sampler);
   } else {
+    // Skeleton check for path guiding mode (placeholder for PPG/VMM logic integration)
+    if (params.path_guiding_mode == PATH_GUIDING_SD_TREE) {
+      // TODO: Perform SD-Tree guided direction sampling inside the path tracer
+    } else if (params.path_guiding_mode == PATH_GUIDING_VMM) {
+      // TODO: Perform VMM (Variational Mixture Model) guided direction sampling
+    }
     Path integrator(params.max_depth, params.rr_depth);
     radiance = integrator.sample(ray, params.scene, sampler);
   }
@@ -76,17 +82,39 @@ extern "C" __global__ void __raygen__render() {
   acc += radiance;
   params.film_pixels[index] = acc;
 
-  Color3f linear_avg = acc / (float)params.sampleCount;
-  Color3f tonemapped = tonemap::apply(linear_avg, params.tonemapping_mode);
-  Color3f final_color = toSRGB(tonemapped);
+  if (params.denoise_active) {
+    SurfaceIntersection si;
+    Color3f alb(0.f);
+    Vector3f norm(0.f);
+    if (params.scene.intersect(ray, ray.mint, ray.maxt, si)) {
+      alb = si.albedo;
+      norm = Vector3f(dot(si.n, params.camera.right),
+                      dot(si.n, params.camera.trueUp),
+                      dot(si.n, params.camera.forward));
+    } else {
+      alb = params.scene.eval_environment(ray.d);
+    }
 
-  params.pbo_ptr[index].x =
-      (unsigned char)clamp(final_color.x * 255.f, 0.f, 255.f);
-  params.pbo_ptr[index].y =
-      (unsigned char)clamp(final_color.y * 255.f, 0.f, 255.f);
-  params.pbo_ptr[index].z =
-      (unsigned char)clamp(final_color.z * 255.f, 0.f, 255.f);
-  params.pbo_ptr[index].w = 255;
+    if (params.sampleCount == 1) {
+      params.denoise_albedo_buffer[index] = alb;
+      params.denoise_normal_buffer[index] = norm;
+    } else {
+      params.denoise_albedo_buffer[index] += alb;
+      params.denoise_normal_buffer[index] += norm;
+    }
+  } else {
+    Color3f linear_avg = acc / (float)params.sampleCount;
+    Color3f tonemapped = tonemap::apply(linear_avg, params.tonemapping_mode);
+    Color3f final_color = toSRGB(tonemapped);
+
+    params.pbo_ptr[index].x =
+        (unsigned char)clamp(final_color.x * 255.f, 0.f, 255.f);
+    params.pbo_ptr[index].y =
+        (unsigned char)clamp(final_color.y * 255.f, 0.f, 255.f);
+    params.pbo_ptr[index].z =
+        (unsigned char)clamp(final_color.z * 255.f, 0.f, 255.f);
+    params.pbo_ptr[index].w = 255;
+  }
 }
 
 extern "C" __global__ void __closesthit__ch() {
@@ -116,4 +144,13 @@ extern "C" __global__ void __closesthit__ch() {
 extern "C" __global__ void __miss__ms() {
   // bvh.intersect handles misses by checking rec.is_valid().
   // We don't need to do anything here.
+}
+
+extern "C" __global__ void __anyhit__shadow() {
+  optixSetPayload_0(1);
+  optixTerminateRay();
+}
+
+extern "C" __global__ void __miss__shadow() {
+  optixSetPayload_0(0);
 }

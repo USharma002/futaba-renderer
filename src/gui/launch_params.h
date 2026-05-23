@@ -3,6 +3,7 @@
 #include "types.cuh"
 #include "perspective.cuh"
 #include "scene.cuh"
+#include "guiding.h"
 
 namespace futaba {
 
@@ -27,21 +28,25 @@ enum TonemappingMode {
 struct LaunchParams {
     uchar4* pbo_ptr;
     Color3f* film_pixels;
+    Scene scene;
+    PerspectiveCamera camera;
     int width;
     int height;
     int sampleCount;
-    PerspectiveCamera camera;
-    Scene scene;
     int max_depth;
     int rr_depth;
     int integrator_mode;
     int tonemapping_mode;
-    bool use_antialiasing;
     Vector3f phong_light_dir;
     float phong_ambient;
     float phong_diffuse;
     float phong_specular;
     float phong_shininess;
+    bool use_antialiasing;
+    bool denoise_active;
+    Color3f* denoise_albedo_buffer;
+    Color3f* denoise_normal_buffer;
+    int path_guiding_mode;
 };
 
 } // namespace futaba
