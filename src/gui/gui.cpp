@@ -160,7 +160,7 @@ FutabaScreen::FutabaScreen(int width, int height)
 
         // 1. Tonemapping dropdown
         new Label(settingsGrid, "Tonemapping", "sans-bold");
-        ComboBox *tonemmapCombo = new ComboBox(settingsGrid, {"None", "ACES", "Reinhardt", "Filmic"});
+        ComboBox *tonemmapCombo = new ComboBox(settingsGrid, {"None", "ACES", "Reinhard", "Filmic"});
         tonemmapCombo->setSelectedIndex((int)m_tonemappingMode);
         tonemmapCombo->setFixedWidth(130);
         tonemmapCombo->setCallback([this](int index) {

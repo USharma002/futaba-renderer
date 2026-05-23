@@ -21,7 +21,7 @@ enum IntegratorMode {
 enum TonemappingMode {
     TONEMAPPING_NONE = 0,
     TONEMAPPING_ACES = 1,
-    TONEMAPPING_REINHARDT = 2,
+    TONEMAPPING_REINHARD = 2,
     TONEMAPPING_FILMIC = 3
 };
 

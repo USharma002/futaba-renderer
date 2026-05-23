@@ -52,8 +52,8 @@ HD Color3f aces(const Color3f& linear) {
     return result;
 }
 
-// Reinhardt tone mapping (local variant)
-HD Color3f reinhardt(const Color3f& linear) {
+// Reinhard tone mapping (local variant)
+HD Color3f reinhard(const Color3f& linear) {
     // result = x / (1 + x)
     Color3f denom = Color3f(
         1.f + linear.x,
@@ -100,8 +100,8 @@ HD Color3f apply(const Color3f& linear, int mode) {
     switch (mode) {
         case TONEMAPPING_ACES:
             return aces(linear);
-        case TONEMAPPING_REINHARDT:
-            return reinhardt(linear);
+        case TONEMAPPING_REINHARD:
+            return reinhard(linear);
         case TONEMAPPING_FILMIC:
             return filmic_uncharted2(linear);
         case TONEMAPPING_NONE:
