@@ -47,6 +47,20 @@ struct LaunchParams {
     Color3f* denoise_albedo_buffer;
     Color3f* denoise_normal_buffer;
     int path_guiding_mode;
+
+    // Training buffers (shape: max_depth x height x width)
+    float* train_active;
+    Point3f* train_position;
+    Color3f* train_normals;
+    Color3f* train_wi;
+    Color3f* train_wo;
+    Color3f* train_radiance;
+    float* train_material_id;
+
+    // Visualization parameters
+    uchar4* vis_pbo_ptr;
+    int vis_depth;
+    int vis_buffer_type;
 };
 
 } // namespace futaba

@@ -31,6 +31,7 @@ struct Frame {
   }
 
   HD Vector3f to_world(const Vector3f &v) const {
+    // project the local vector to the world space using the frame's orthonormal basis
     return s * v.x + t * v.y + n * v.z;
   }
 };

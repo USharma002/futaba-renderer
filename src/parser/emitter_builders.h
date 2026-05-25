@@ -64,7 +64,7 @@ inline EmitterInstance makeEmitterFromPropertyLists(
 
     // Unknown type: produce a no-op emitter and warn.
     warnings.push_back(
-        "Unknown emitter type '" + key + "' – treated as no emitter. "
+        "Unknown emitter type '" + key + "' - treated as no emitter. "
         "Check the spelling or add a builder to emitter_builders.h.");
     return EmitterInstance(EmitterType::None);
 }

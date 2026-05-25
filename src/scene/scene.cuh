@@ -9,6 +9,8 @@
 #include "bvh.cuh"
 #include "envmap.cuh"
 #include "distribution.cuh"
+#include "emitter.cuh"
+#include "mesh.cuh"
 
 namespace futaba {
 
@@ -23,35 +25,6 @@ namespace futaba {
                     __FILE__, __LINE__, cudaGetErrorString(_err));             \
         }                                                                      \
     } while (0)
-
-// ---------------------------------------------------------------------------
-// Emitter type constants (GPU-visible).
-// Values MUST match EmitterType enum in parser/scene_loader.h.
-// ---------------------------------------------------------------------------
-static constexpr uint32_t kEmitterTypeNone        = 0u;
-static constexpr uint32_t kEmitterTypeArea        = 1u;
-static constexpr uint32_t kEmitterTypePoint       = 2u;
-static constexpr uint32_t kEmitterTypeDirectional = 3u;
-
-// GPU-side mesh instance metadata (lightweight; fit for device transfer).
-struct MeshInstanceGPU {
-    uint32_t triangleStart;
-    uint32_t triangleCount;
-    int      emitterId; // index into Scene.emitters (-1 = not emissive)
-};
-
-struct EmitterGPU {
-    uint32_t  type;           // One of kEmitterType* constants above
-    uint32_t  flags;          // Bitfield - see EmitterFlags
-    Color3f   radiance;
-    Point3f   position;       // Point emitters
-    Vector3f  direction;      // Directional emitters
-    int       attachedMeshId; // -1 unless area emitter; CPU also tracks this
-};
-
-enum EmitterFlags : uint32_t {
-    EMITTER_FLAG_TWO_SIDED = 1u << 0,
-};
 
 
 // ---------------------------------------------------------------------------
@@ -111,6 +84,12 @@ struct Scene {
         if (hit && rec.material_id >= 0 && rec.material_id < (int)materialCount) {
             const Material& mat = materials[rec.material_id];
             rec.albedo = mat.albedo;
+#ifdef __CUDA_ARCH__
+            if (mat.texObj != 0) {
+                float4 texVal = tex2D<float4>(mat.texObj, rec.uv.x, rec.uv.y);
+                rec.albedo = mat.albedo * Color3f(texVal.x, texVal.y, texVal.z);
+            }
+#endif
             rec.specular = mat.specular;
             rec.emission = mat.emission;
             rec.conductor_eta = mat.conductorEta;

@@ -27,6 +27,7 @@ add_executable(app
     src/accel/optix_bvh.cu
     src/denoiser/denoiser.cu
     src/guiding/guiding.cpp
+    src/guiding/training_buffer.cu
 )
 
 add_executable(struct_sizes
@@ -100,7 +101,11 @@ add_custom_command(
     DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/gui/renderer_device.cu"
             "${CMAKE_CURRENT_SOURCE_DIR}/src/gui/launch_params.h"
             "${CMAKE_CURRENT_SOURCE_DIR}/src/guiding/guiding.h"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/guiding/guiding_device.cuh"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/emitters/emitter.cuh"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/scene/mesh.cuh"
             "${CMAKE_CURRENT_SOURCE_DIR}/src/integrator/heatmap.cuh"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/integrator/path.cuh"
             "${CMAKE_CURRENT_SOURCE_DIR}/src/accel/bvh.cuh"
             "${CMAKE_CURRENT_SOURCE_DIR}/src/scene/scene.cuh"
 )

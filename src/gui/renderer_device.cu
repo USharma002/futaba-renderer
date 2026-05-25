@@ -68,21 +68,56 @@ extern "C" __global__ void __raygen__render() {
     VolumetricPath integrator(params.max_depth, params.rr_depth, false);
     radiance = integrator.sample(ray, params.scene, sampler);
   } else {
-    // Skeleton check for path guiding mode (placeholder for PPG/VMM logic integration)
+    // Select correct path guiding mode (placeholder for PPG/VMM logic integration)
     if (params.path_guiding_mode == PATH_GUIDING_SD_TREE) {
       // TODO: Perform SD-Tree guided direction sampling inside the path tracer
     } else if (params.path_guiding_mode == PATH_GUIDING_VMM) {
       // TODO: Perform VMM (Variational Mixture Model) guided direction sampling
     }
     Path integrator(params.max_depth, params.rr_depth);
-    radiance = integrator.sample(ray, params.scene, sampler);
+
+    if (params.train_active) {
+      TrainingBuffers tb;
+      tb.active = params.train_active;
+      tb.position = params.train_position;
+      tb.normals = params.train_normals;
+      tb.wi = params.train_wi;
+      tb.wo = params.train_wo;
+      tb.radiance = params.train_radiance;
+      tb.material_id = params.train_material_id;
+      tb.max_depth = params.max_depth;
+      tb.pixel_index = index;
+      tb.img_size = params.width * params.height;
+
+      if (params.denoise_active && params.denoise_albedo_buffer && params.denoise_normal_buffer) {
+        radiance = integrator.sample<true, true>(
+            ray, params.scene, sampler, tb,
+            params.denoise_albedo_buffer, params.denoise_normal_buffer,
+            index, params.sampleCount, &params.camera);
+      } else {
+        radiance = integrator.sample<true, false>(
+            ray, params.scene, sampler, tb);
+      }
+    } else {
+      if (params.denoise_active && params.denoise_albedo_buffer && params.denoise_normal_buffer) {
+        radiance = integrator.sample<false, true>(
+            ray, params.scene, sampler, TrainingBuffers(),
+            params.denoise_albedo_buffer, params.denoise_normal_buffer,
+            index, params.sampleCount, &params.camera);
+      } else {
+        radiance = integrator.sample<false, false>(
+            ray, params.scene, sampler);
+      }
+    }
   }
 
   Color3f acc = params.film_pixels[index];
   acc += radiance;
   params.film_pixels[index] = acc;
 
-  if (params.denoise_active) {
+  // Only run the fallback intersection query for denoiser buffers if they weren't already written by the path integrator
+  bool denoise_guides_written = (params.integrator_mode == INTEGRATOR_PATH);
+  if (params.denoise_active && !denoise_guides_written) {
     SurfaceIntersection si;
     Color3f alb(0.f);
     Vector3f norm(0.f);
@@ -102,7 +137,7 @@ extern "C" __global__ void __raygen__render() {
       params.denoise_albedo_buffer[index] += alb;
       params.denoise_normal_buffer[index] += norm;
     }
-  } else {
+  } else if (!params.denoise_active) {
     Color3f linear_avg = acc / (float)params.sampleCount;
     Color3f tonemapped = tonemap::apply(linear_avg, params.tonemapping_mode);
     Color3f final_color = toSRGB(tonemapped);

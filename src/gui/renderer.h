@@ -22,7 +22,20 @@ void launch_render(uchar4 *d_buffer, futaba::HDRFilm *film, int width,
                    float phong_specular, float phong_shininess,
                    bool use_denoiser,
                    futaba::DenoiserManager* denoiser,
-                   int path_guiding_mode);
+                   int path_guiding_mode,
+                   // Training buffers
+                   float* train_active,
+                   Point3f* train_position,
+                   Color3f* train_normals,
+                   Color3f* train_wi,
+                   Color3f* train_wo,
+                   Color3f* train_radiance,
+                   float* train_material_id,
+                   // Visualization parameters
+                   uchar4* d_vis_buffer,
+                   int vis_depth,
+                   int vis_buffer_type,
+                   bool vis_active);
 
 // Build the built-in Cornell-box fallback into an existing Scene.
 void buildCornellBox(futaba::Scene &scene);

@@ -9,6 +9,7 @@
 #include "scene_loader.h"
 #include "denoiser.h"
 #include "guiding.h"
+#include "training_buffer.h"
 
 namespace futaba {
 class HDRFilm;
@@ -62,6 +63,7 @@ private:
   bool m_useDenoiser = false;
   futaba::DenoiserManager m_denoiser;
   futaba::GuidingManager m_guiding;
+  bool m_collectTraining = false;
 
   GLuint m_glTex = 0;
   GLuint m_glPbo = 0;
@@ -90,4 +92,27 @@ private:
   float m_phongDiffuse = 0.88f;
   float m_phongSpecular = 0.35f;
   float m_phongShininess = 32.f;
+
+  // Training Buffer Manager
+  futaba::TrainingBufferManager m_trainManager;
+
+  // Visualization resources
+  GLuint m_glTexVis = 0;
+  GLuint m_glPboVis = 0;
+  cudaGraphicsResource_t m_cudaPboResourceVis = nullptr;
+
+  // Visualization GUI widgets and state
+  nanogui::Window *m_visualizationWindow = nullptr;
+  nanogui::ImageView *m_visImageView = nullptr;
+  nanogui::IntBox<int> *m_visDepthBox = nullptr;
+  int m_visDepth = 0;
+  int m_visBufferType = 0;
+  bool m_showVisualizer = false;
+
+  void saveTrainingData(const std::string& basePath);
+  void freeTrainingBuffers();
+
+  std::vector<cudaArray*>          m_cudaTextureArrays;
+  std::vector<cudaTextureObject_t> m_cudaTextureObjects;
+  void clearTextures();
 };

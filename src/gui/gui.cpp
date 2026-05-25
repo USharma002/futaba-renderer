@@ -7,10 +7,16 @@
 #include <filesystem>
 #include <functional>
 #include <iostream>
+#include <fstream>
+#include <stb_image.h>
 
 using namespace nanogui;
 using namespace futaba;
 namespace fs = std::filesystem;
+
+static cudaTextureObject_t createCudaTexture(const std::string& filename,
+                                             std::vector<cudaArray*>& allocatedArrays,
+                                             std::vector<cudaTextureObject_t>& allocatedTextures);
 
 static constexpr float kMinFov = 5.f;
 static constexpr float kMaxFov = 120.f;
@@ -129,6 +135,7 @@ FutabaScreen::FutabaScreen(int width, int height)
         if (!path.empty())
             loadScene(path);
     });
+    
 
     new Label(window, "Integrator", "sans-bold");
     ComboBox *integratorCombo =
@@ -154,6 +161,12 @@ FutabaScreen::FutabaScreen(int width, int height)
         m_settingsWindow->setPosition(nanogui::Vector2i(245, 15));
         m_settingsWindow->setLayout(new GroupLayout(10, 5, 5, 5));
         m_settingsWindow->setVisible(false);
+
+        // Close button
+        auto *settingsCloseBtn = new Button(m_settingsWindow->buttonPanel(), "", ENTYPO_ICON_CROSS);
+        settingsCloseBtn->setCallback([this] {
+            m_settingsWindow->setVisible(false);
+        });
 
         Widget *settingsGrid = new Widget(m_settingsWindow);
         settingsGrid->setLayout(new GridLayout(Orientation::Horizontal, 2, Alignment::Middle, 0, 8));
@@ -183,14 +196,44 @@ FutabaScreen::FutabaScreen(int width, int height)
         ComboBox *guidingCombo = new ComboBox(settingsGrid, {"None", "SD-Tree (PPG)", "VMM (Mixture)"});
         guidingCombo->setSelectedIndex((int)m_pathGuidingMode);
         guidingCombo->setFixedWidth(130);
-        guidingCombo->setCallback([this](int index) {
-            m_pathGuidingMode = index;
+
+        // 4. Collect Training Data checkbox
+        new Label(settingsGrid, "Training Data", "sans-bold");
+        CheckBox *cbTraining = new CheckBox(settingsGrid, "Collect");
+        cbTraining->setChecked(m_collectTraining);
+        cbTraining->setCallback([this](bool checked) {
+            m_collectTraining = checked;
             m_film->clear();
+        });
+
+        guidingCombo->setCallback([this, cbTraining](int index) {
+            m_pathGuidingMode = index;
+            if (index != 0 && !m_collectTraining) {
+                m_collectTraining = true;
+                cbTraining->setChecked(true);
+            }
+            m_film->clear();
+        });
+
+        new Widget(settingsGrid);
+        Button *btnVisualizer = new Button(settingsGrid, "Buffer Visualizer...");
+        btnVisualizer->setCallback([this] {
+            if (m_visualizationWindow) {
+                m_showVisualizer = !m_visualizationWindow->visible();
+                m_visualizationWindow->setVisible(m_showVisualizer);
+            }
         });
 
     m_phongWindow = new Window(this, "Phong Controls");
     m_phongWindow->setPosition(nanogui::Vector2i(245, 15));
     m_phongWindow->setLayout(new GroupLayout(10, 5, 5, 5));
+
+    // Close button for phong window
+    auto *phongCloseBtn = new Button(m_phongWindow->buttonPanel(), "", ENTYPO_ICON_CROSS);
+    phongCloseBtn->setCallback([this] {
+        m_phongWindow->setVisible(false);
+    });
+
 
     auto addPhongSlider = [this](const std::string &name, float minVal,
                                  float maxVal, float initialValue,
@@ -248,6 +291,7 @@ FutabaScreen::FutabaScreen(int width, int height)
     });
 
 
+
     new Label(window, "FOV", "sans-bold");
     m_fovSlider = new Slider(window);
     m_fovSlider->setValue(fovToSlider(m_currentFov));
@@ -299,6 +343,14 @@ FutabaScreen::FutabaScreen(int width, int height)
     depthBox->setFixedWidth(70);
     depthBox->setCallback([this](int value) {
         m_maxDepth = value;
+        if (m_visDepthBox) {
+            m_visDepthBox->setMinMaxValues(0, m_maxDepth - 1);
+            if (m_visDepth >= m_maxDepth) {
+                m_visDepth = m_maxDepth - 1;
+                m_visDepthBox->setValue(m_visDepth);
+            }
+        }
+        recreateRenderTargets(m_renderWidth, m_renderHeight);
         m_film->clear();
     });
 
@@ -312,6 +364,56 @@ FutabaScreen::FutabaScreen(int width, int height)
     rrBox->setCallback([this](int value) {
         m_rrDepth = value;
         m_film->clear();
+    });
+
+    m_visualizationWindow = new Window(this, "Buffer Visualizer");
+    m_visualizationWindow->setPosition(nanogui::Vector2i(mSize.x() - 340, 120));
+    m_visualizationWindow->setLayout(new GroupLayout(10, 5, 5, 5));
+    m_visualizationWindow->setVisible(false);
+
+    auto *visCloseBtn = new Button(m_visualizationWindow->buttonPanel(), "", ENTYPO_ICON_CROSS);
+    visCloseBtn->setCallback([this] {
+        m_showVisualizer = false;
+        if (m_visualizationWindow)
+            m_visualizationWindow->setVisible(false);
+    });
+
+    new Label(m_visualizationWindow, "Select Buffer Channel", "sans-bold");
+    ComboBox* visCombo = new ComboBox(m_visualizationWindow, {
+        "Active",
+        "Position",
+        "Normals",
+        "Incoming Angle (wi)",
+        "Outgoing Angle (wo)",
+        "Incoming Radiance",
+        "Material ID"
+    });
+    visCombo->setSelectedIndex(m_visBufferType);
+    visCombo->setCallback([this](int index) {
+        m_visBufferType = index;
+    });
+
+    Widget* visDepthPanel = new Widget(m_visualizationWindow);
+    visDepthPanel->setLayout(new BoxLayout(Orientation::Horizontal, Alignment::Middle, 0, 10));
+    new Label(visDepthPanel, "Bounce Depth", "sans-bold");
+    m_visDepthBox = new IntBox<int>(visDepthPanel, m_visDepth);
+    m_visDepthBox->setEditable(true);
+    m_visDepthBox->setSpinnable(true);
+    m_visDepthBox->setMinMaxValues(0, m_maxDepth - 1);
+    m_visDepthBox->setFixedWidth(60);
+    m_visDepthBox->setCallback([this](int value) {
+        m_visDepth = value;
+    });
+
+    m_visImageView = new ImageView(m_visualizationWindow, m_glTexVis);
+    m_visImageView->setFixedSize(nanogui::Vector2i(300, 300));
+
+    Button *btnSaveTrain = new Button(m_visualizationWindow, "Save Training Data...");
+    btnSaveTrain->setCallback([this] {
+        std::string path = file_dialog({{"bin", "Binary file"}}, true);
+        if (!path.empty()) {
+            saveTrainingData(path);
+        }
     });
 
     setVisible(true);
@@ -347,6 +449,7 @@ FutabaScreen::FutabaScreen(int width, int height)
 }
 
 FutabaScreen::~FutabaScreen() {
+    clearTextures();
     delete m_film;
     m_film = nullptr;
     m_scene.clear();
@@ -366,9 +469,24 @@ FutabaScreen::~FutabaScreen() {
         glDeleteTextures(1, &m_glTex);
         m_glTex = 0;
     }
+
+    freeTrainingBuffers();
+    if (m_cudaPboResourceVis != nullptr) {
+        cudaGraphicsUnregisterResource(m_cudaPboResourceVis);
+        m_cudaPboResourceVis = nullptr;
+    }
+    if (m_glPboVis != 0) {
+        glDeleteBuffers(1, &m_glPboVis);
+        m_glPboVis = 0;
+    }
+    if (m_glTexVis != 0) {
+        glDeleteTextures(1, &m_glTexVis);
+        m_glTexVis = 0;
+    }
 }
 
 bool FutabaScreen::loadScene(const std::string &xmlPath) {
+    clearTextures();
     SceneLoader loader;
     LoadedScene loaded;
     std::string error;
@@ -381,22 +499,22 @@ bool FutabaScreen::loadScene(const std::string &xmlPath) {
     }
 
     m_scene.clear();
+
+    std::string baseDir = fs::path(xmlPath).parent_path().string();
+    if (baseDir.empty()) baseDir = ".";
+    for (size_t i = 0; i < loaded.materials.size(); ++i) {
+        if (i < loaded.materialTexturePaths.size() && !loaded.materialTexturePaths[i].empty()) {
+            fs::path texPath = fs::path(baseDir) / loaded.materialTexturePaths[i];
+            cudaTextureObject_t texObj = createCudaTexture(texPath.string(), m_cudaTextureArrays, m_cudaTextureObjects);
+            loaded.materials[i].texObj = texObj;
+        }
+    }
+
     m_scene.setTriangles(loaded.triangles.data(),
                                              (uint32_t)loaded.triangles.size());
     m_scene.setMaterials(loaded.materials.data(),
                                              (uint32_t)loaded.materials.size());
     
-    // Convert and upload mesh instances
-    std::vector<futaba::MeshInstanceGPU> meshGPU;
-    for (const auto& mesh : loaded.meshes) {
-        futaba::MeshInstanceGPU m;
-        m.triangleStart = mesh.triangleStart;
-        m.triangleCount = mesh.triangleCount;
-        m.emitterId = mesh.emitterId;
-        meshGPU.push_back(m);
-    }
-    m_scene.setMeshes(meshGPU.data(), (uint32_t)meshGPU.size());
-
     std::vector<futaba::EmitterGPU> emittersGPU;
     emittersGPU.reserve(loaded.emitters.size());
     for (const auto& emitter : loaded.emitters) {
@@ -409,6 +527,22 @@ bool FutabaScreen::loadScene(const std::string &xmlPath) {
         g.attachedMeshId = -1;
         emittersGPU.push_back(g);
     }
+
+    // Convert and upload mesh instances
+    std::vector<futaba::MeshInstanceGPU> meshGPU;
+    for (size_t i = 0; i < loaded.meshes.size(); ++i) {
+        const auto& mesh = loaded.meshes[i];
+        futaba::MeshInstanceGPU m;
+        m.triangleStart = mesh.triangleStart;
+        m.triangleCount = mesh.triangleCount;
+        m.emitterId = mesh.emitterId;
+        meshGPU.push_back(m);
+
+        if (mesh.emitterId >= 0 && mesh.emitterId < (int)emittersGPU.size()) {
+            emittersGPU[mesh.emitterId].attachedMeshId = (int)i;
+        }
+    }
+    m_scene.setMeshes(meshGPU.data(), (uint32_t)meshGPU.size());
     m_scene.setEmitters(emittersGPU.data(), (uint32_t)emittersGPU.size());
 
     // Build emissive-triangle distribution (area * emission luminance)
@@ -606,16 +740,41 @@ void FutabaScreen::renderLoop() {
         size_t num_bytes;
         cudaGraphicsMapResources(1, &m_cudaPboResource, 0);
         cudaGraphicsResourceGetMappedPointer((void **)&d_pbo_ptr, &num_bytes,
-                                                                                 m_cudaPboResource);
+                                             m_cudaPboResource);
+
+        uchar4 *d_vis_pbo_ptr = nullptr;
+        if (m_showVisualizer && m_cudaPboResourceVis) {
+            cudaGraphicsMapResources(1, &m_cudaPboResourceVis, 0);
+            cudaGraphicsResourceGetMappedPointer((void **)&d_vis_pbo_ptr, &num_bytes,
+                                                 m_cudaPboResourceVis);
+        }
 
         launch_render(d_pbo_ptr, m_film, m_renderWidth, m_renderHeight, m_camera,
-                                    m_scene, m_maxDepth, m_rrDepth, m_integratorMode,
-                                    m_tonemappingMode, m_useAntialiasing, m_phongLightDir,
-                                    m_phongAmbient, m_phongDiffuse, m_phongSpecular,
-                                    m_phongShininess, m_useDenoiser,
-                                    &m_denoiser, m_pathGuidingMode);
+                      m_scene, m_maxDepth, m_rrDepth, m_integratorMode,
+                      m_tonemappingMode, m_useAntialiasing, m_phongLightDir,
+                      m_phongAmbient, m_phongDiffuse, m_phongSpecular,
+                      m_phongShininess, m_useDenoiser,
+                      &m_denoiser, m_pathGuidingMode,
+                      m_collectTraining ? m_trainManager.getActive() : nullptr,
+                      m_collectTraining ? m_trainManager.getPosition() : nullptr,
+                      m_collectTraining ? m_trainManager.getNormals() : nullptr,
+                      m_collectTraining ? m_trainManager.getWi() : nullptr,
+                      m_collectTraining ? m_trainManager.getWo() : nullptr,
+                      m_collectTraining ? m_trainManager.getRadiance() : nullptr,
+                      m_collectTraining ? m_trainManager.getMaterialId() : nullptr,
+                      d_vis_pbo_ptr, m_visDepth, m_visBufferType, m_showVisualizer);
 
         cudaGraphicsUnmapResources(1, &m_cudaPboResource, 0);
+        if (m_showVisualizer && m_cudaPboResourceVis) {
+            cudaGraphicsUnmapResources(1, &m_cudaPboResourceVis, 0);
+
+            // Copy visualizer PBO contents to the visualizer texture
+            glBindBuffer(GL_PIXEL_UNPACK_BUFFER, m_glPboVis);
+            glBindTexture(GL_TEXTURE_2D, m_glTexVis);
+            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, m_renderWidth, m_renderHeight,
+                            GL_RGBA, GL_UNSIGNED_BYTE, 0);
+            glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
+        }
 
         glBindBuffer(GL_PIXEL_UNPACK_BUFFER, m_glPbo);
         glBindTexture(GL_TEXTURE_2D, m_glTex);
@@ -767,6 +926,43 @@ void FutabaScreen::recreateRenderTargets(int width, int height) {
         m_denoiser.resize(width, height);
     }
     m_guiding.resize(width, height);
+
+    // Reallocate training buffers
+    m_trainManager.allocate(width, height, m_maxDepth);
+
+    // Reallocate Visualizer resources
+    if (m_cudaPboResourceVis != nullptr) {
+        cudaGraphicsUnregisterResource(m_cudaPboResourceVis);
+        m_cudaPboResourceVis = nullptr;
+    }
+    if (m_glPboVis != 0) {
+        glDeleteBuffers(1, &m_glPboVis);
+        m_glPboVis = 0;
+    }
+    if (m_glTexVis != 0) {
+        glDeleteTextures(1, &m_glTexVis);
+        m_glTexVis = 0;
+    }
+
+    glGenTextures(1, &m_glTexVis);
+    glBindTexture(GL_TEXTURE_2D, m_glTexVis);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA,
+                 GL_UNSIGNED_BYTE, NULL);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+
+    glGenBuffers(1, &m_glPboVis);
+    glBindBuffer(GL_PIXEL_UNPACK_BUFFER, m_glPboVis);
+    glBufferData(GL_PIXEL_UNPACK_BUFFER, width * height * 4 * sizeof(GLubyte),
+                 NULL, GL_DYNAMIC_DRAW);
+    glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
+
+    cudaGraphicsGLRegisterBuffer(&m_cudaPboResourceVis, m_glPboVis,
+                                 cudaGraphicsMapFlagsWriteDiscard);
+
+    if (m_visImageView) {
+        m_visImageView->bindImage(m_glTexVis);
+    }
 }
 
 void FutabaScreen::updateCamera() {
@@ -837,4 +1033,82 @@ void FutabaScreen::drawGizmo() {
     drawAxis(::Vector3f(0, 0, 1), nvgRGBA(50, 50, 255, 255), "Z");
 
     nvgRestore(vg);
+}
+
+void FutabaScreen::saveTrainingData(const std::string& basePath) {
+    m_trainManager.save(basePath, m_renderWidth, m_renderHeight, m_maxDepth);
+}
+
+void FutabaScreen::freeTrainingBuffers() {
+    m_trainManager.freeBuffers();
+}
+
+static cudaTextureObject_t createCudaTexture(const std::string& filename,
+                                             std::vector<cudaArray*>& allocatedArrays,
+                                             std::vector<cudaTextureObject_t>& allocatedTextures)
+{
+    int width = 0, height = 0, channels = 0;
+    unsigned char* data = stbi_load(filename.c_str(), &width, &height, &channels, 4); // load as RGBA
+    if (!data) {
+        std::cerr << "Failed to load texture: " << filename << std::endl;
+        return 0;
+    }
+
+    cudaChannelFormatDesc channelDesc = cudaCreateChannelDesc(8, 8, 8, 8, cudaChannelFormatKindUnsigned);
+    cudaArray* cuArray = nullptr;
+    cudaError_t err = cudaMallocArray(&cuArray, &channelDesc, width, height);
+    if (err != cudaSuccess) {
+        std::cerr << "CUDA malloc array failed: " << cudaGetErrorString(err) << std::endl;
+        stbi_image_free(data);
+        return 0;
+    }
+
+    err = cudaMemcpy2DToArray(cuArray, 0, 0, data, width * 4 * sizeof(unsigned char), width * 4 * sizeof(unsigned char), height, cudaMemcpyHostToDevice);
+    stbi_image_free(data);
+    if (err != cudaSuccess) {
+        std::cerr << "CUDA memcpy to array failed: " << cudaGetErrorString(err) << std::endl;
+        cudaFreeArray(cuArray);
+        return 0;
+    }
+
+    allocatedArrays.push_back(cuArray);
+
+    struct cudaResourceDesc resDesc;
+    memset(&resDesc, 0, sizeof(resDesc));
+    resDesc.resType = cudaResourceTypeArray;
+    resDesc.res.array.array = cuArray;
+
+    struct cudaTextureDesc texDesc;
+    memset(&texDesc, 0, sizeof(texDesc));
+    texDesc.addressMode[0] = cudaAddressModeWrap;
+    texDesc.addressMode[1] = cudaAddressModeWrap;
+    texDesc.filterMode = cudaFilterModeLinear;
+    texDesc.readMode = cudaReadModeNormalizedFloat;
+    texDesc.normalizedCoords = 1;
+
+    cudaTextureObject_t texObj = 0;
+    err = cudaCreateTextureObject(&texObj, &resDesc, &texDesc, NULL);
+    if (err != cudaSuccess) {
+        std::cerr << "CUDA create texture object failed: " << cudaGetErrorString(err) << std::endl;
+        return 0;
+    }
+
+    allocatedTextures.push_back(texObj);
+    return texObj;
+}
+
+void FutabaScreen::clearTextures() {
+    for (auto texObj : m_cudaTextureObjects) {
+        if (texObj != 0) {
+            cudaDestroyTextureObject(texObj);
+        }
+    }
+    m_cudaTextureObjects.clear();
+
+    for (auto cuArray : m_cudaTextureArrays) {
+        if (cuArray != nullptr) {
+            cudaFreeArray(cuArray);
+        }
+    }
+    m_cudaTextureArrays.clear();
 }
