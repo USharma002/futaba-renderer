@@ -33,7 +33,7 @@ Futaba is a high-performance, learning-oriented physically-based renderer writte
 ### Current Implementation
 - [x] **GPU Acceleration**: CUDA-based pipeline with NVIDIA OptiX hardware acceleration and an optimized software BVH fallback.
 - [x] **Interactive UI**: Real-time viewport driven by NanoGUI featuring:
-   ![Interactive UI - Default](assets/futaba-window.png)
+   ![Interactive UI - Default](assets/glass-of-water-window.png)
   - Smooth WASD navigation with gimbal-lock-free quaternion rotations.
   - On-screen orientation gizmo anchored to the top-right corner.
   - Responsive, non-distorting viewport that dynamically adapts to window resizing.
