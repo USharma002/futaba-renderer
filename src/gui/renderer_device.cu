@@ -75,7 +75,19 @@ extern "C" __global__ void __raygen__render() {
       // TODO: Perform VMM (Variational Mixture Model) guided direction sampling
     }
     Path integrator(params.max_depth, params.rr_depth);
-    radiance = integrator.sample(ray, params.scene, sampler);
+    TrainingBuffers tb;
+    tb.active = params.train_active;
+    tb.position = params.train_position;
+    tb.normals = params.train_normals;
+    tb.wi = params.train_wi;
+    tb.wo = params.train_wo;
+    tb.radiance = params.train_radiance;
+    tb.material_id = params.train_material_id;
+    tb.max_depth = params.max_depth;
+    tb.pixel_index = index;
+    tb.img_size = params.width * params.height;
+
+    radiance = integrator.sample(ray, params.scene, sampler, tb);
   }
 
   Color3f acc = params.film_pixels[index];

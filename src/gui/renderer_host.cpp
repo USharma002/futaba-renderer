@@ -2,6 +2,7 @@
 #include "renderer.h"
 #include "distribution.cuh"
 #include "denoiser.h"
+#include "training_buffer.h"
 #include <iostream>
 #include <optix.h>
 #include <optix_stubs.h>
@@ -320,7 +321,20 @@ void launch_render(uchar4 *d_buffer, HDRFilm *film, int width, int height,
                    float phong_specular, float phong_shininess,
                    bool use_denoiser,
                    futaba::DenoiserManager* denoiser,
-                   int path_guiding_mode) {
+                   int path_guiding_mode,
+                   // Training buffers
+                   float* train_active,
+                   Point3f* train_position,
+                   Color3f* train_normals,
+                   Color3f* train_wi,
+                   Color3f* train_wo,
+                   Color3f* train_radiance,
+                   float* train_material_id,
+                   // Visualization parameters
+                   uchar4* d_vis_buffer,
+                   int vis_depth,
+                   int vis_buffer_type,
+                   bool vis_active) {
   g_pipeline.init();
 
   film->sampleCount++;
@@ -354,6 +368,20 @@ void launch_render(uchar4 *d_buffer, HDRFilm *film, int width, int height,
     params.denoise_normal_buffer = nullptr;
   }
 
+  // Training parameters
+  params.train_active = train_active;
+  params.train_position = train_position;
+  params.train_normals = train_normals;
+  params.train_wi = train_wi;
+  params.train_wo = train_wo;
+  params.train_radiance = train_radiance;
+  params.train_material_id = train_material_id;
+
+  // Visualization parameters
+  params.vis_pbo_ptr = d_vis_buffer;
+  params.vis_depth = vis_depth;
+  params.vis_buffer_type = vis_buffer_type;
+
   cudaMemcpy(reinterpret_cast<void *>(g_pipeline.d_params), &params,
              sizeof(LaunchParams), cudaMemcpyHostToDevice);
 
@@ -373,6 +401,24 @@ void launch_render(uchar4 *d_buffer, HDRFilm *film, int width, int height,
         film->sampleCount,
         d_buffer,
         tonemapping_mode
+    );
+  }
+
+  // Run training visualization kernel if active
+  if (vis_active && d_vis_buffer) {
+    run_visualization_kernel(
+        train_active,
+        train_position,
+        train_normals,
+        train_wi,
+        train_wo,
+        train_radiance,
+        train_material_id,
+        width, height,
+        max_depth,
+        vis_depth,
+        vis_buffer_type,
+        d_vis_buffer
     );
   }
 }
