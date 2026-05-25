@@ -278,13 +278,26 @@ static bool loadEnvMapHDR(const std::string& filename,
                           int& height,
                           std::string& errorOut)
 {
-    std::string ext = fs::path(filename).extension().string();
-    for (char& c : ext) c = std::tolower(c);
-    if (ext == ".exr") {
+    fs::path path = fs::path(baseDir) / filename;
+    std::ifstream f(path, std::ios::binary);
+    bool isEXR = false;
+    if (f.is_open()) {
+        char magic[4] = {0};
+        if (f.read(magic, 4)) {
+            if (magic[0] == 0x76 && magic[1] == 0x2f && magic[2] == 0x31 && magic[3] == 0x01) {
+                isEXR = true;
+            }
+        }
+        f.close();
+    } else {
+        errorOut = "Cannot open environment map file: " + path.string();
+        return false;
+    }
+
+    if (isEXR) {
         return loadEnvMapEXR(filename, baseDir, pixels, width, height, errorOut);
     }
 
-    fs::path path = fs::path(baseDir) / filename;
     int w = 0, h = 0, comp = 0;
     float* data = stbi_loadf(path.string().c_str(), &w, &h, &comp, 3);
     if (!data) {
@@ -787,6 +800,418 @@ bool SceneLoader::parseMesh(const std::string& baseDir,
     return true;
 }
 
+static size_t getPLYTypeSize(const std::string& type) {
+    if (type == "char" || type == "uchar" || type == "int8" || type == "uint8") return 1;
+    if (type == "short" || type == "ushort" || type == "int16" || type == "uint16") return 2;
+    if (type == "int" || type == "uint" || type == "int32" || type == "uint32" || type == "float" || type == "float32") return 4;
+    if (type == "double" || type == "float64") return 8;
+    return 0;
+}
+
+static int readBinaryInt(std::ifstream& file, const std::string& type) {
+    if (type == "char" || type == "int8" || type == "uchar" || type == "uint8") {
+        uint8_t v = 0; file.read(reinterpret_cast<char*>(&v), 1); return static_cast<int>(v);
+    }
+    if (type == "short" || type == "int16" || type == "ushort" || type == "uint16") {
+        int16_t v = 0; file.read(reinterpret_cast<char*>(&v), 2); return static_cast<int>(v);
+    }
+    if (type == "int" || type == "int32" || type == "uint" || type == "uint32") {
+        int32_t v = 0; file.read(reinterpret_cast<char*>(&v), 4); return static_cast<int>(v);
+    }
+    return 0;
+}
+
+struct PLYProperty {
+    std::string name;
+    std::string type;
+    size_t size = 0;
+    size_t offset = 0;
+};
+
+struct PLYElement {
+    std::string name;
+    size_t count = 0;
+    std::vector<PLYProperty> properties;
+    size_t size = 0;
+};
+
+bool SceneLoader::parseMeshPLY(const std::string& baseDir,
+                               const std::string& plyFilename,
+                               const std::string& meshName,
+                               int                materialId,
+                               int                emitterId,
+                               const Matrix4f&    transform,
+                               const Matrix4f&    normalTransform,
+                               LoadedScene&       out,
+                               std::string&       errorOut)
+{
+    fs::path plyPath = fs::path(baseDir) / plyFilename;
+    std::ifstream file(plyPath, std::ios::binary);
+    if (!file.is_open()) {
+        errorOut = "Cannot open PLY file: " + plyPath.string();
+        return false;
+    }
+
+    std::string format;
+    std::vector<PLYElement> elements;
+    PLYElement* currentElement = nullptr;
+
+    std::string line;
+    while (std::getline(file, line)) {
+        while (!line.empty() && (line.back() == '\r' || line.back() == '\n' || line.back() == ' '))
+            line.pop_back();
+        if (line.empty()) continue;
+
+        std::istringstream ss(line);
+        std::string token;
+        ss >> token;
+
+        if (token == "ply") continue;
+        if (token == "comment") continue;
+
+        if (token == "format") {
+            ss >> format;
+            continue;
+        }
+
+        if (token == "element") {
+            std::string elName;
+            size_t elCount;
+            ss >> elName >> elCount;
+            elements.push_back({elName, elCount, {}, 0});
+            currentElement = &elements.back();
+            continue;
+        }
+
+        if (token == "property") {
+            if (!currentElement) {
+                errorOut = "Property declared before element in PLY: " + line;
+                return false;
+            }
+            std::string propType;
+            ss >> propType;
+            if (propType == "list") {
+                std::string countType, indexType, propName;
+                ss >> countType >> indexType >> propName;
+                currentElement->properties.push_back({propName, "list:" + countType + ":" + indexType, 0, 0});
+            } else {
+                std::string propName;
+                ss >> propName;
+                size_t pSize = getPLYTypeSize(propType);
+                currentElement->properties.push_back({propName, propType, pSize, currentElement->size});
+                currentElement->size += pSize;
+            }
+            continue;
+        }
+
+        if (token == "end_header") {
+            break;
+        }
+    }
+
+    const PLYElement* vertexElement = nullptr;
+    const PLYElement* faceElement = nullptr;
+    for (const auto& el : elements) {
+        if (el.name == "vertex") vertexElement = &el;
+        else if (el.name == "face") faceElement = &el;
+    }
+
+    if (!vertexElement || vertexElement->count == 0) {
+        errorOut = "PLY file has no vertex element or count is 0.";
+        return false;
+    }
+
+    int xIdx = -1, yIdx = -1, zIdx = -1;
+    int nxIdx = -1, nyIdx = -1, nzIdx = -1;
+    int uIdx = -1, vIdx = -1;
+
+    for (int i = 0; i < (int)vertexElement->properties.size(); ++i) {
+        const auto& prop = vertexElement->properties[i];
+        if (prop.name == "x") xIdx = i;
+        else if (prop.name == "y") yIdx = i;
+        else if (prop.name == "z") zIdx = i;
+        else if (prop.name == "nx") nxIdx = i;
+        else if (prop.name == "ny") nyIdx = i;
+        else if (prop.name == "nz") nzIdx = i;
+        else if (prop.name == "u" || prop.name == "s" || prop.name == "texture_u") uIdx = i;
+        else if (prop.name == "v" || prop.name == "t" || prop.name == "texture_v") vIdx = i;
+    }
+
+    if (xIdx < 0 || yIdx < 0 || zIdx < 0) {
+        errorOut = "PLY vertex element missing x, y, or z coordinates.";
+        return false;
+    }
+
+    bool hasNormals = (nxIdx >= 0 && nyIdx >= 0 && nzIdx >= 0);
+    bool hasUVs = (uIdx >= 0 && vIdx >= 0);
+
+    std::vector<Point3f> verts(vertexElement->count);
+    std::vector<Vector3f> norms(hasNormals ? vertexElement->count : 0);
+    std::vector<Point2f> texcoords(hasUVs ? vertexElement->count : 0);
+
+    if (format == "binary_little_endian" || format == "binary_little_endian 1.0") {
+        std::vector<char> vertexBuffer(vertexElement->count * vertexElement->size);
+        file.read(vertexBuffer.data(), vertexBuffer.size());
+        if (!file) {
+            errorOut = "Failed to read binary vertex data in " + plyPath.string();
+            return false;
+        }
+
+        const char* ptr = vertexBuffer.data();
+        for (size_t i = 0; i < vertexElement->count; ++i) {
+            const char* vPtr = ptr + i * vertexElement->size;
+            
+            auto getVal = [&](int idx) -> float {
+                const auto& prop = vertexElement->properties[idx];
+                const char* pVal = vPtr + prop.offset;
+                if (prop.type == "float" || prop.type == "float32") {
+                    float v; std::memcpy(&v, pVal, 4); return v;
+                }
+                if (prop.type == "double" || prop.type == "float64") {
+                    double v; std::memcpy(&v, pVal, 8); return static_cast<float>(v);
+                }
+                if (prop.type == "int" || prop.type == "int32") {
+                    int32_t v; std::memcpy(&v, pVal, 4); return static_cast<float>(v);
+                }
+                if (prop.type == "uint" || prop.type == "uint32") {
+                    uint32_t v; std::memcpy(&v, pVal, 4); return static_cast<float>(v);
+                }
+                if (prop.type == "uchar" || prop.type == "uint8") {
+                    return static_cast<float>(static_cast<uint8_t>(*pVal));
+                }
+                if (prop.type == "char" || prop.type == "int8") {
+                    return static_cast<float>(static_cast<int8_t>(*pVal));
+                }
+                if (prop.type == "short" || prop.type == "int16") {
+                    int16_t v; std::memcpy(&v, pVal, 2); return static_cast<float>(v);
+                }
+                if (prop.type == "ushort" || prop.type == "uint16") {
+                    uint16_t v; std::memcpy(&v, pVal, 2); return static_cast<float>(v);
+                }
+                return 0.f;
+            };
+
+            Point3f p(getVal(xIdx), getVal(yIdx), getVal(zIdx));
+            p = transform * p;
+            verts[i] = p;
+
+            if (hasNormals) {
+                Vector3f n(getVal(nxIdx), getVal(nyIdx), getVal(nzIdx));
+                n = normalize(normalTransform * n);
+                norms[i] = n;
+            }
+
+            if (hasUVs) {
+                texcoords[i] = Point2f(getVal(uIdx), getVal(vIdx));
+            }
+        }
+    } else if (format == "ascii" || format == "ascii 1.0") {
+        for (size_t i = 0; i < vertexElement->count; ++i) {
+            std::string vLine;
+            if (!std::getline(file, vLine)) {
+                errorOut = "Unexpected end of file while reading ASCII vertices.";
+                return false;
+            }
+            std::istringstream vss(vLine);
+            std::vector<float> values;
+            float val;
+            while (vss >> val) values.push_back(val);
+            if (values.size() < vertexElement->properties.size()) {
+                errorOut = "Too few values in PLY vertex line: " + vLine;
+                return false;
+            }
+
+            Point3f p(values[xIdx], values[yIdx], values[zIdx]);
+            p = transform * p;
+            verts[i] = p;
+
+            if (hasNormals) {
+                Vector3f n(values[nxIdx], values[nyIdx], values[nzIdx]);
+                n = normalize(normalTransform * n);
+                norms[i] = n;
+            }
+
+            if (hasUVs) {
+                texcoords[i] = Point2f(values[uIdx], values[vIdx]);
+            }
+        }
+    } else {
+        errorOut = "Unsupported PLY format: " + format;
+        return false;
+    }
+
+    if (!faceElement || faceElement->count == 0) {
+        errorOut = "PLY file has no face element or count is 0.";
+        return false;
+    }
+
+    if (faceElement->properties.empty()) {
+        errorOut = "PLY face element has no properties.";
+        return false;
+    }
+
+    const auto& faceProp = faceElement->properties[0];
+    if (faceProp.type.rfind("list:", 0) != 0) {
+        errorOut = "PLY face property is not a list type: " + faceProp.type;
+        return false;
+    }
+
+    std::string countType, indexType;
+    {
+        std::istringstream lss(faceProp.type);
+        std::string dummy, cT, iT;
+        std::getline(lss, dummy, ':');
+        std::getline(lss, cT, ':');
+        std::getline(lss, iT, ':');
+        countType = cT;
+        indexType = iT;
+    }
+
+    const uint32_t meshTriangleStart = (uint32_t)out.triangles.size();
+    const int meshId = (int)out.meshes.size();
+
+    if (format == "binary_little_endian" || format == "binary_little_endian 1.0") {
+        for (size_t f = 0; f < faceElement->count; ++f) {
+            int count = readBinaryInt(file, countType);
+            if (count < 3) {
+                errorOut = "Face has fewer than 3 vertices.";
+                return false;
+            }
+            std::vector<int> faceIndices(count);
+            for (int i = 0; i < count; ++i) {
+                faceIndices[i] = readBinaryInt(file, indexType);
+            }
+
+            for (int i = 1; i + 1 < count; ++i) {
+                int i0 = faceIndices[0];
+                int i1 = faceIndices[i];
+                int i2 = faceIndices[i + 1];
+
+                if (i0 < 0 || i0 >= (int)verts.size() ||
+                    i1 < 0 || i1 >= (int)verts.size() ||
+                    i2 < 0 || i2 >= (int)verts.size()) {
+                    errorOut = "PLY face vertex index out of bounds.";
+                    return false;
+                }
+
+                Triangle tri;
+                tri.p0 = verts[i0];
+                tri.p1 = verts[i1];
+                tri.p2 = verts[i2];
+
+                if (hasNormals) {
+                    tri.n0 = norms[i0];
+                    tri.n1 = norms[i1];
+                    tri.n2 = norms[i2];
+                    tri.has_normals = true;
+                } else {
+                    tri.has_normals = false;
+                }
+
+                if (hasUVs) {
+                    tri.uv0 = texcoords[i0];
+                    tri.uv1 = texcoords[i1];
+                    tri.uv2 = texcoords[i2];
+                    tri.has_uvs = true;
+                } else {
+                    tri.has_uvs = false;
+                }
+
+                tri.material_id = materialId;
+                tri.mesh_id = meshId;
+                out.triangles.push_back(tri);
+            }
+        }
+    } else {
+        for (size_t f = 0; f < faceElement->count; ++f) {
+            std::string fLine;
+            if (!std::getline(file, fLine)) {
+                errorOut = "Unexpected end of file while reading ASCII faces.";
+                return false;
+            }
+            std::istringstream fss(fLine);
+            int count;
+            if (!(fss >> count)) {
+                errorOut = "Failed to read face vertex count.";
+                return false;
+            }
+            if (count < 3) {
+                errorOut = "Face has fewer than 3 vertices.";
+                return false;
+            }
+            std::vector<int> faceIndices(count);
+            for (int i = 0; i < count; ++i) {
+                fss >> faceIndices[i];
+            }
+
+            for (int i = 1; i + 1 < count; ++i) {
+                int i0 = faceIndices[0];
+                int i1 = faceIndices[i];
+                int i2 = faceIndices[i + 1];
+
+                if (i0 < 0 || i0 >= (int)verts.size() ||
+                    i1 < 0 || i1 >= (int)verts.size() ||
+                    i2 < 0 || i2 >= (int)verts.size()) {
+                    errorOut = "PLY face vertex index out of bounds.";
+                    return false;
+                }
+
+                Triangle tri;
+                tri.p0 = verts[i0];
+                tri.p1 = verts[i1];
+                tri.p2 = verts[i2];
+
+                if (hasNormals) {
+                    tri.n0 = norms[i0];
+                    tri.n1 = norms[i1];
+                    tri.n2 = norms[i2];
+                    tri.has_normals = true;
+                } else {
+                    tri.has_normals = false;
+                }
+
+                if (hasUVs) {
+                    tri.uv0 = texcoords[i0];
+                    tri.uv1 = texcoords[i1];
+                    tri.uv2 = texcoords[i2];
+                    tri.has_uvs = true;
+                } else {
+                    tri.has_uvs = false;
+                }
+
+                tri.material_id = materialId;
+                tri.mesh_id = meshId;
+                out.triangles.push_back(tri);
+            }
+        }
+    }
+
+    const uint32_t meshTriangleCount = (uint32_t)out.triangles.size() - meshTriangleStart;
+
+    MeshInstance meshInst;
+    meshInst.name          = meshName;
+    meshInst.materialId    = materialId;
+    meshInst.triangleStart = meshTriangleStart;
+    meshInst.triangleCount = meshTriangleCount;
+    meshInst.transform     = transform;
+    meshInst.emitterType   = (emitterId >= 0) ? EmitterType::Area : EmitterType::None;
+    meshInst.emitterId     = emitterId;
+
+    meshInst.boundingBoxMin = verts[0];
+    meshInst.boundingBoxMax = verts[0];
+    for (const auto& v : verts) {
+        meshInst.boundingBoxMin.x = std::min(meshInst.boundingBoxMin.x, v.x);
+        meshInst.boundingBoxMin.y = std::min(meshInst.boundingBoxMin.y, v.y);
+        meshInst.boundingBoxMin.z = std::min(meshInst.boundingBoxMin.z, v.z);
+        meshInst.boundingBoxMax.x = std::max(meshInst.boundingBoxMax.x, v.x);
+        meshInst.boundingBoxMax.y = std::max(meshInst.boundingBoxMax.y, v.y);
+        meshInst.boundingBoxMax.z = std::max(meshInst.boundingBoxMax.z, v.z);
+    }
+
+    out.meshes.push_back(meshInst);
+    return true;
+}
+
 // ---------------------------------------------------------------------------
 // Camera parser
 // ---------------------------------------------------------------------------
@@ -901,7 +1326,7 @@ bool SceneLoader::load(const std::string& xmlPath,
                     : std::string("obj");
 
                 std::string objFile;
-                if (shapeType == "obj" || name == "mesh")
+                if (shapeType == "obj" || shapeType == "ply" || name == "mesh")
                     objFile = meshProps.getString("filename");
 
                 std::string meshName = node.attribute("id").value();
@@ -914,6 +1339,12 @@ bool SceneLoader::load(const std::string& xmlPath,
                 PropertyList bsdfProps, emitterProps;
                 int materialId = -1;
                 int emitterId = -1;
+
+                bool hasMedium = false;
+                Color3f mediumSigmaT(1.f);
+                Color3f mediumAlbedo(1.f);
+                float mediumScale = 1.f;
+                float mediumG = 0.f;
 
                 // Start with identity transforms.
                 Matrix4f meshTransform;    // forward transform (for positions)
@@ -947,6 +1378,29 @@ bool SceneLoader::load(const std::string& xmlPath,
                         if (inst.type != EmitterType::None) {
                             emitterId = (int)out.emitters.size();
                             out.emitters.push_back(inst);
+                        }
+                    }
+                    else if (cn == "medium") {
+                        const std::string mediumType = child.attribute("type").value();
+                        if (mediumType == "homogeneous") {
+                            hasMedium = true;
+                            PropertyList medProps;
+                            fillPropertyList(child, medProps,
+                                [this](const std::string& s) { return this->parseVec3(s); },
+                                resolveValue);
+                            mediumSigmaT = medProps.getColor("sigma_t", Color3f(1.f));
+                            mediumAlbedo = medProps.getColor("albedo", Color3f(1.f));
+                            mediumScale = medProps.getFloat("scale", 1.f);
+                            mediumG = medProps.getFloat("g", 0.f);
+                            for (const pugi::xml_node& mchild : child.children()) {
+                                if (std::string(mchild.name()) == "phase") {
+                                    PropertyList phaseProps;
+                                    fillPropertyList(mchild, phaseProps,
+                                        [this](const std::string& s) { return this->parseVec3(s); },
+                                        resolveValue);
+                                    mediumG = phaseProps.getFloat("g", 0.f);
+                                }
+                            }
                         }
                     }
                     else if (cn == "boolean") {
@@ -1032,6 +1486,10 @@ bool SceneLoader::load(const std::string& xmlPath,
                     if (!parseMesh(baseDir, objFile, meshName, materialId,
                                    emitterId, meshTransform, normalTransform, out, errorOut))
                         return false;
+                } else if (shapeType == "ply") {
+                    if (!parseMeshPLY(baseDir, objFile, meshName, materialId,
+                                      emitterId, meshTransform, normalTransform, out, errorOut))
+                        return false;
                 } else if (shapeType == "rectangle") {
                     appendRectangleShape(meshName, materialId, emitterId,
                                          meshTransform, normalTransform, out);
@@ -1045,6 +1503,15 @@ bool SceneLoader::load(const std::string& xmlPath,
                                     meshTransform, normalTransform, out);
                 } else {
                     out.warnings.push_back("Unsupported shape type '" + shapeType + "'; skipping shape '" + meshName + "'.");
+                }
+
+                if (hasMedium) {
+                    out.hasMedium = true;
+                    out.mediumMeshId = (int)out.meshes.size() - 1;
+                    out.mediumSigmaT = mediumSigmaT * mediumScale;
+                    out.mediumSigmaS = mediumAlbedo * out.mediumSigmaT;
+                    out.mediumSigmaA = out.mediumSigmaT - out.mediumSigmaS;
+                    out.mediumG = mediumG;
                 }
 
                 ++nextMatId;
@@ -1153,7 +1620,9 @@ bool SceneLoader::load(const std::string& xmlPath,
                 out.hasCamera = true;
             }
         }
-        // sampler, integrator, etc. - silently skipped
+        else if (name == "integrator") {
+            out.integratorType = resolveValue(node.attribute("type").value());
+        }
     }
 
     if (out.triangles.empty()) {

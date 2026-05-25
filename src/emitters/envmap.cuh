@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <cuda_runtime.h>
 #include "types.cuh"
+#include "warp.cuh"
 
 namespace futaba {
 
@@ -31,6 +32,7 @@ struct EnvironmentMapEmitter {
         return hasConstant || (hasMap && pixels != nullptr && width > 0 && height > 0);
     }
 
+    // Evaluate the environment map in the given world direction. If a constant color is set, it returns that color regardless of the direction.
     HD Color3f eval(const Vector3f& dirWorld) const {
         if (hasConstant)
             return constant;
@@ -38,6 +40,7 @@ struct EnvironmentMapEmitter {
         if (!hasMap || pixels == nullptr || width == 0 || height == 0)
             return Color3f(0.f);
 
+        // convert world direction to environment map UV coordinates
         const Vector3f d = normalize(Vector3f(
             toWorld.m[0][0] * dirWorld.x + toWorld.m[1][0] * dirWorld.y + toWorld.m[2][0] * dirWorld.z,
             toWorld.m[0][1] * dirWorld.x + toWorld.m[1][1] * dirWorld.y + toWorld.m[2][1] * dirWorld.z,
@@ -70,6 +73,7 @@ struct EnvironmentMapEmitter {
         const int y00 = (y0 < 0) ? 0 : ((y0 > max_y) ? max_y : y0);
         const int y10 = ((y0 + 1) < 0) ? 0 : (((y0 + 1) > max_y) ? max_y : (y0 + 1));
 
+        
         const Color3f c00 = pixels[y00 * width + x00];
         const Color3f c10 = pixels[y00 * width + x10];
         const Color3f c01 = pixels[y10 * width + x00];
@@ -81,10 +85,7 @@ struct EnvironmentMapEmitter {
     }
 
     HD Vector3f sampleDirection(const Point2f& sample) const {
-        const float z = 1.f - 2.f * sample.x;
-        const float r = sqrtf(fmaxf(0.f, 1.f - z * z));
-        const float phi = 2.f * M_PI * sample.y;
-        return Vector3f(r * cosf(phi), r * sinf(phi), z);
+        return Warp::squareToUniformSphere(sample);
     }
 
     HD float pdf(const Vector3f& /*dirWorld*/) const {

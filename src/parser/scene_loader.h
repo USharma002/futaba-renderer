@@ -57,6 +57,12 @@ struct LoadedScene {
     std::vector<MeshInstance>   meshes;
 
     bool                 hasEnvMap = false;
+    bool                 hasMedium = false;
+    int                  mediumMeshId = -1;
+    Color3f              mediumSigmaS = Color3f(0.f);
+    Color3f              mediumSigmaA = Color3f(0.f);
+    Color3f              mediumSigmaT = Color3f(0.f);
+    float                mediumG = 0.f;
     std::vector<Color3f>  envMapPixels;
     int                  envMapWidth = 0;
     int                  envMapHeight = 0;
@@ -69,6 +75,7 @@ struct LoadedScene {
     Point3f    camTarget;
     ::Vector3f camUp  = ::Vector3f(0.f, 1.f, 0.f);
     float      camFov = 45.f;
+    std::string integratorType = "path";
 
     // Non-fatal warnings collected during loading (e.g. unknown BSDF/emitter types).
     // Check this after a successful load to detect degraded scenes.
@@ -97,6 +104,16 @@ private:
                    const Matrix4f&    normalTransform,
                    LoadedScene&       out,
                    std::string&       errorOut);
+
+    bool parseMeshPLY(const std::string& baseDir,
+                      const std::string& plyFilename,
+                      const std::string& meshName,
+                      int                materialId,
+                      int                emitterId,      // -1 if not emissive
+                      const Matrix4f&    transform,
+                      const Matrix4f&    normalTransform,
+                      LoadedScene&       out,
+                      std::string&       errorOut);
 
     bool parseCamera(const std::string& originStr,
                      const std::string& targetStr,

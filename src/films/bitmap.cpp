@@ -16,17 +16,22 @@
 
 namespace futaba {
 
-Bitmap* HDRFilm::toBitmap() const {
+Bitmap* HDRFilm::toBitmap(const float* d_alternative_pixels) const {
     Bitmap* bmp = new Bitmap(width, height);
     
-    // Copy pixels from GPU to CPU
-    cudaMemcpy(bmp->pixels.data(), d_pixels, width * height * sizeof(Color3f), cudaMemcpyDeviceToHost);
-    
-    // Divide by sampleCount to get average radiance
-    if (sampleCount > 1) {
-        float invSampleCount = 1.0f / (float)sampleCount;
-        for (int i = 0; i < width * height; ++i) {
-            bmp->pixels[i] *= invSampleCount;
+    if (d_alternative_pixels != nullptr) {
+        // Copy alternative pixels from GPU to CPU (already averaged by denoiser input prep)
+        cudaMemcpy(bmp->pixels.data(), d_alternative_pixels, width * height * sizeof(Color3f), cudaMemcpyDeviceToHost);
+    } else {
+        // Copy pixels from GPU to CPU
+        cudaMemcpy(bmp->pixels.data(), d_pixels, width * height * sizeof(Color3f), cudaMemcpyDeviceToHost);
+        
+        // Divide by sampleCount to get average radiance
+        if (sampleCount > 1) {
+            float invSampleCount = 1.0f / (float)sampleCount;
+            for (int i = 0; i < width * height; ++i) {
+                bmp->pixels[i] *= invSampleCount;
+            }
         }
     }
     

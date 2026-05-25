@@ -59,23 +59,37 @@ public:
         if (it == m_properties.end()) {
             throw std::runtime_error("Property '" + name + "' is missing");
         }
-        const ColorValue* value = std::get_if<ColorValue>(&it->second);
-        if (value == nullptr) {
-            throw std::runtime_error("Property '" + name + "' has wrong type (expected <color>)");
-        }
-        return value->value;
+        if (const ColorValue* cv = std::get_if<ColorValue>(&it->second)) return cv->value;
+        if (const float* f = std::get_if<float>(&it->second)) return ::Color3f(*f, *f, *f);
+        if (const int* i = std::get_if<int>(&it->second)) return ::Color3f((float)*i, (float)*i, (float)*i);
+        if (const bool* b = std::get_if<bool>(&it->second)) return ::Color3f(*b ? 1.f : 0.f);
+        if (const VectorValue* vv = std::get_if<VectorValue>(&it->second)) return ::Color3f(vv->value.x, vv->value.y, vv->value.z);
+        if (const ::Point3f* pt = std::get_if<::Point3f>(&it->second)) return ::Color3f(pt->x, pt->y, pt->z);
+        throw std::runtime_error("Property '" + name + "' has wrong type (expected color-coercible)");
     }
-    ::Point3f getPoint(const std::string& name) const { return getRequired<::Point3f>(name, "point"); }
+    ::Point3f getPoint(const std::string& name) const {
+        auto it = m_properties.find(name);
+        if (it == m_properties.end()) {
+            throw std::runtime_error("Property '" + name + "' is missing");
+        }
+        if (const ::Point3f* pt = std::get_if<::Point3f>(&it->second)) return *pt;
+        if (const VectorValue* vv = std::get_if<VectorValue>(&it->second)) return ::Point3f(vv->value.x, vv->value.y, vv->value.z);
+        if (const ColorValue* cv = std::get_if<ColorValue>(&it->second)) return ::Point3f(cv->value.x, cv->value.y, cv->value.z);
+        if (const float* f = std::get_if<float>(&it->second)) return ::Point3f(*f, *f, *f);
+        if (const int* i = std::get_if<int>(&it->second)) return ::Point3f((float)*i, (float)*i, (float)*i);
+        throw std::runtime_error("Property '" + name + "' has wrong type (expected point-coercible)");
+    }
     ::Vector3f getVector(const std::string& name) const {
         auto it = m_properties.find(name);
         if (it == m_properties.end()) {
             throw std::runtime_error("Property '" + name + "' is missing");
         }
-        const VectorValue* value = std::get_if<VectorValue>(&it->second);
-        if (value == nullptr) {
-            throw std::runtime_error("Property '" + name + "' has wrong type (expected <vector>)");
-        }
-        return value->value;
+        if (const VectorValue* vv = std::get_if<VectorValue>(&it->second)) return vv->value;
+        if (const ::Point3f* pt = std::get_if<::Point3f>(&it->second)) return ::Vector3f(pt->x, pt->y, pt->z);
+        if (const ColorValue* cv = std::get_if<ColorValue>(&it->second)) return ::Vector3f(cv->value.x, cv->value.y, cv->value.z);
+        if (const float* f = std::get_if<float>(&it->second)) return ::Vector3f(*f, *f, *f);
+        if (const int* i = std::get_if<int>(&it->second)) return ::Vector3f((float)*i, (float)*i, (float)*i);
+        throw std::runtime_error("Property '" + name + "' has wrong type (expected vector-coercible)");
     }
 
     bool getBoolean(const std::string& name, bool defaultValue) const {
@@ -105,26 +119,34 @@ public:
     std::string getString(const std::string& name, const std::string& defaultValue) const { return getWithDefault<std::string>(name, defaultValue, "string"); }
     ::Color3f getColor(const std::string& name, const ::Color3f& defaultValue) const {
         auto it = m_properties.find(name);
-        if (it == m_properties.end()) {
-            return defaultValue;
-        }
-        const ColorValue* value = std::get_if<ColorValue>(&it->second);
-        if (value == nullptr) {
-            throw std::runtime_error("Property '" + name + "' has wrong type (expected <color>)");
-        }
-        return value->value;
+        if (it == m_properties.end()) return defaultValue;
+        if (const ColorValue* cv = std::get_if<ColorValue>(&it->second)) return cv->value;
+        if (const float* f = std::get_if<float>(&it->second)) return ::Color3f(*f, *f, *f);
+        if (const int* i = std::get_if<int>(&it->second)) return ::Color3f((float)*i, (float)*i, (float)*i);
+        if (const bool* b = std::get_if<bool>(&it->second)) return ::Color3f(*b ? 1.f : 0.f);
+        if (const VectorValue* vv = std::get_if<VectorValue>(&it->second)) return ::Color3f(vv->value.x, vv->value.y, vv->value.z);
+        if (const ::Point3f* pt = std::get_if<::Point3f>(&it->second)) return ::Color3f(pt->x, pt->y, pt->z);
+        return defaultValue;
     }
-    ::Point3f getPoint(const std::string& name, const ::Point3f& defaultValue) const { return getWithDefault<::Point3f>(name, defaultValue, "point"); }
+    ::Point3f getPoint(const std::string& name, const ::Point3f& defaultValue) const {
+        auto it = m_properties.find(name);
+        if (it == m_properties.end()) return defaultValue;
+        if (const ::Point3f* pt = std::get_if<::Point3f>(&it->second)) return *pt;
+        if (const VectorValue* vv = std::get_if<VectorValue>(&it->second)) return ::Point3f(vv->value.x, vv->value.y, vv->value.z);
+        if (const ColorValue* cv = std::get_if<ColorValue>(&it->second)) return ::Point3f(cv->value.x, cv->value.y, cv->value.z);
+        if (const float* f = std::get_if<float>(&it->second)) return ::Point3f(*f, *f, *f);
+        if (const int* i = std::get_if<int>(&it->second)) return ::Point3f((float)*i, (float)*i, (float)*i);
+        return defaultValue;
+    }
     ::Vector3f getVector(const std::string& name, const ::Vector3f& defaultValue) const {
         auto it = m_properties.find(name);
-        if (it == m_properties.end()) {
-            return defaultValue;
-        }
-        const VectorValue* value = std::get_if<VectorValue>(&it->second);
-        if (value == nullptr) {
-            throw std::runtime_error("Property '" + name + "' has wrong type (expected <vector>)");
-        }
-        return value->value;
+        if (it == m_properties.end()) return defaultValue;
+        if (const VectorValue* vv = std::get_if<VectorValue>(&it->second)) return vv->value;
+        if (const ::Point3f* pt = std::get_if<::Point3f>(&it->second)) return ::Vector3f(pt->x, pt->y, pt->z);
+        if (const ColorValue* cv = std::get_if<ColorValue>(&it->second)) return ::Vector3f(cv->value.x, cv->value.y, cv->value.z);
+        if (const float* f = std::get_if<float>(&it->second)) return ::Vector3f(*f, *f, *f);
+        if (const int* i = std::get_if<int>(&it->second)) return ::Vector3f((float)*i, (float)*i, (float)*i);
+        return defaultValue;
     }
 
     bool hasProperty(const std::string& name) const {

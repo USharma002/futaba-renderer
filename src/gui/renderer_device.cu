@@ -1,4 +1,4 @@
-#include "common.cuh"
+#include "common.cuh" // Touch to trigger PTX rebuild 2
 #include "heatmap.cuh"
 #include "albedo.cuh"
 #include "phong.cuh"
@@ -33,8 +33,6 @@ extern "C" __global__ void __raygen__render() {
   unsigned int seed = (unsigned int)(index + 1) ^ (params.sampleCount << 16);
   Sampler sampler(seed);
 
-  // If anti aliasing is enabled, use random jitter esle 0.5f to sample pixel
-  // center
   float jx = params.use_antialiasing ? sampler.next1D() : 0.5f;
   float jy = params.use_antialiasing ? sampler.next1D() : 0.5f;
   float u = (float)(idx.x + jx) / (float)params.width;
@@ -42,7 +40,6 @@ extern "C" __global__ void __raygen__render() {
 
   Ray3f ray = params.camera.sampleRay(u, v, sampler);
 
-  // Select correct integrator based on mode in GUI
   Color3f radiance;
   if (params.integrator_mode == INTEGRATOR_NORMALS) {
     Normals normals;
@@ -61,63 +58,16 @@ extern "C" __global__ void __raygen__render() {
                 params.phong_diffuse, params.phong_specular,
                 params.phong_shininess);
     radiance = phong.sample(ray, params.scene, sampler);
-  } else if (params.integrator_mode == INTEGRATOR_PRIMITIVES) {
+  } else {
     Primitives primitives;
     radiance = primitives.sample(ray, params.scene, sampler);
-  } else if (params.integrator_mode == INTEGRATOR_VOLPATH) {
-    VolumetricPath integrator(params.max_depth, params.rr_depth, false);
-    radiance = integrator.sample(ray, params.scene, sampler);
-  } else {
-    // Select correct path guiding mode (placeholder for PPG/VMM logic integration)
-    if (params.path_guiding_mode == PATH_GUIDING_SD_TREE) {
-      // TODO: Perform SD-Tree guided direction sampling inside the path tracer
-    } else if (params.path_guiding_mode == PATH_GUIDING_VMM) {
-      // TODO: Perform VMM (Variational Mixture Model) guided direction sampling
-    }
-    Path integrator(params.max_depth, params.rr_depth);
-
-    if (params.train_active) {
-      TrainingBuffers tb;
-      tb.active = params.train_active;
-      tb.position = params.train_position;
-      tb.normals = params.train_normals;
-      tb.wi = params.train_wi;
-      tb.wo = params.train_wo;
-      tb.radiance = params.train_radiance;
-      tb.material_id = params.train_material_id;
-      tb.max_depth = params.max_depth;
-      tb.pixel_index = index;
-      tb.img_size = params.width * params.height;
-
-      if (params.denoise_active && params.denoise_albedo_buffer && params.denoise_normal_buffer) {
-        radiance = integrator.sample<true, true>(
-            ray, params.scene, sampler, tb,
-            params.denoise_albedo_buffer, params.denoise_normal_buffer,
-            index, params.sampleCount, &params.camera);
-      } else {
-        radiance = integrator.sample<true, false>(
-            ray, params.scene, sampler, tb);
-      }
-    } else {
-      if (params.denoise_active && params.denoise_albedo_buffer && params.denoise_normal_buffer) {
-        radiance = integrator.sample<false, true>(
-            ray, params.scene, sampler, TrainingBuffers(),
-            params.denoise_albedo_buffer, params.denoise_normal_buffer,
-            index, params.sampleCount, &params.camera);
-      } else {
-        radiance = integrator.sample<false, false>(
-            ray, params.scene, sampler);
-      }
-    }
   }
 
   Color3f acc = params.film_pixels[index];
   acc += radiance;
   params.film_pixels[index] = acc;
 
-  // Only run the fallback intersection query for denoiser buffers if they weren't already written by the path integrator
-  bool denoise_guides_written = (params.integrator_mode == INTEGRATOR_PATH);
-  if (params.denoise_active && !denoise_guides_written) {
+  if (params.denoise_active) {
     SurfaceIntersection si;
     Color3f alb(0.f);
     Vector3f norm(0.f);
@@ -137,7 +87,161 @@ extern "C" __global__ void __raygen__render() {
       params.denoise_albedo_buffer[index] += alb;
       params.denoise_normal_buffer[index] += norm;
     }
-  } else if (!params.denoise_active) {
+  } else {
+    Color3f linear_avg = acc / (float)params.sampleCount;
+    Color3f tonemapped = tonemap::apply(linear_avg, params.tonemapping_mode);
+    Color3f final_color = toSRGB(tonemapped);
+
+    params.pbo_ptr[index].x =
+        (unsigned char)clamp(final_color.x * 255.f, 0.f, 255.f);
+    params.pbo_ptr[index].y =
+        (unsigned char)clamp(final_color.y * 255.f, 0.f, 255.f);
+    params.pbo_ptr[index].z =
+        (unsigned char)clamp(final_color.z * 255.f, 0.f, 255.f);
+    params.pbo_ptr[index].w = 255;
+  }
+}
+
+extern "C" __global__ void __raygen__path() {
+  uint3 idx = optixGetLaunchIndex();
+
+  if (idx.x >= params.width || idx.y >= params.height)
+    return;
+
+  int index = idx.y * params.width + idx.x;
+
+  unsigned int seed = (unsigned int)(index + 1) ^ (params.sampleCount << 16);
+  Sampler sampler(seed);
+
+  float jx = params.use_antialiasing ? sampler.next1D() : 0.5f;
+  float jy = params.use_antialiasing ? sampler.next1D() : 0.5f;
+  float u = (float)(idx.x + jx) / (float)params.width;
+  float v = (float)(idx.y + jy) / (float)params.height;
+
+  Ray3f ray = params.camera.sampleRay(u, v, sampler);
+
+  Color3f radiance;
+  Path integrator(params.max_depth, params.rr_depth);
+
+  if (params.train_active) {
+    TrainingBuffers tb;
+    tb.active = params.train_active;
+    tb.position = params.train_position;
+    tb.normals = params.train_normals;
+    tb.wi = params.train_wi;
+    tb.wo = params.train_wo;
+    tb.radiance = params.train_radiance;
+    tb.material_id = params.train_material_id;
+    tb.max_depth = params.max_depth;
+    tb.pixel_index = index;
+    tb.img_size = params.width * params.height;
+
+    if (params.denoise_active && params.denoise_albedo_buffer && params.denoise_normal_buffer) {
+      radiance = integrator.sample<true, true>(
+          ray, params.scene, sampler, tb,
+          params.denoise_albedo_buffer, params.denoise_normal_buffer,
+          index, params.sampleCount, &params.camera);
+    } else {
+      radiance = integrator.sample<true, false>(
+          ray, params.scene, sampler, tb);
+    }
+  } else {
+    if (params.denoise_active && params.denoise_albedo_buffer && params.denoise_normal_buffer) {
+      radiance = integrator.sample<false, true>(
+          ray, params.scene, sampler, TrainingBuffers(),
+          params.denoise_albedo_buffer, params.denoise_normal_buffer,
+          index, params.sampleCount, &params.camera);
+    } else {
+      radiance = integrator.sample<false, false>(
+          ray, params.scene, sampler);
+    }
+  }
+
+  Color3f acc = params.film_pixels[index];
+  acc += radiance;
+  params.film_pixels[index] = acc;
+
+  if (params.denoise_active) {
+    SurfaceIntersection si;
+    Color3f alb(0.f);
+    Vector3f norm(0.f);
+    if (params.scene.intersect(ray, ray.mint, ray.maxt, si)) {
+      alb = si.albedo;
+      norm = Vector3f(dot(si.n, params.camera.right),
+                      dot(si.n, params.camera.trueUp),
+                      dot(si.n, params.camera.forward));
+    } else {
+      alb = params.scene.eval_environment(ray.d);
+    }
+
+    if (params.sampleCount == 1) {
+      params.denoise_albedo_buffer[index] = alb;
+      params.denoise_normal_buffer[index] = norm;
+    } else {
+      params.denoise_albedo_buffer[index] += alb;
+      params.denoise_normal_buffer[index] += norm;
+    }
+  } else {
+    Color3f linear_avg = acc / (float)params.sampleCount;
+    Color3f tonemapped = tonemap::apply(linear_avg, params.tonemapping_mode);
+    Color3f final_color = toSRGB(tonemapped);
+
+    params.pbo_ptr[index].x =
+        (unsigned char)clamp(final_color.x * 255.f, 0.f, 255.f);
+    params.pbo_ptr[index].y =
+        (unsigned char)clamp(final_color.y * 255.f, 0.f, 255.f);
+    params.pbo_ptr[index].z =
+        (unsigned char)clamp(final_color.z * 255.f, 0.f, 255.f);
+    params.pbo_ptr[index].w = 255;
+  }
+}
+
+extern "C" __global__ void __raygen__volpath() {
+  uint3 idx = optixGetLaunchIndex();
+
+  if (idx.x >= params.width || idx.y >= params.height)
+    return;
+
+  int index = idx.y * params.width + idx.x;
+
+  unsigned int seed = (unsigned int)(index + 1) ^ (params.sampleCount << 16);
+  Sampler sampler(seed);
+
+  float jx = params.use_antialiasing ? sampler.next1D() : 0.5f;
+  float jy = params.use_antialiasing ? sampler.next1D() : 0.5f;
+  float u = (float)(idx.x + jx) / (float)params.width;
+  float v = (float)(idx.y + jy) / (float)params.height;
+
+  Ray3f ray = params.camera.sampleRay(u, v, sampler);
+
+  VolumetricPath integrator(params.max_depth, params.rr_depth, false);
+  Color3f radiance = integrator.sample(ray, params.scene, sampler);
+
+  Color3f acc = params.film_pixels[index];
+  acc += radiance;
+  params.film_pixels[index] = acc;
+
+  if (params.denoise_active) {
+    SurfaceIntersection si;
+    Color3f alb(0.f);
+    Vector3f norm(0.f);
+    if (params.scene.intersect(ray, ray.mint, ray.maxt, si)) {
+      alb = si.albedo;
+      norm = Vector3f(dot(si.n, params.camera.right),
+                      dot(si.n, params.camera.trueUp),
+                      dot(si.n, params.camera.forward));
+    } else {
+      alb = params.scene.eval_environment(ray.d);
+    }
+
+    if (params.sampleCount == 1) {
+      params.denoise_albedo_buffer[index] = alb;
+      params.denoise_normal_buffer[index] = norm;
+    } else {
+      params.denoise_albedo_buffer[index] += alb;
+      params.denoise_normal_buffer[index] += norm;
+    }
+  } else {
     Color3f linear_avg = acc / (float)params.sampleCount;
     Color3f tonemapped = tonemap::apply(linear_avg, params.tonemapping_mode);
     Color3f final_color = toSRGB(tonemapped);

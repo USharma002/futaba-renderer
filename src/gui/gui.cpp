@@ -119,7 +119,12 @@ FutabaScreen::FutabaScreen(int width, int height)
     btnSave->setCallback([this] {
         std::string path = file_dialog({{"exr", "OpenEXR"}}, true);
         if (!path.empty()) {
-            Bitmap *bmp = m_film->toBitmap();
+            Bitmap *bmp = nullptr;
+            if (m_useDenoiser && m_denoiser.getOutputBeauty() != nullptr) {
+                bmp = m_film->toBitmap(m_denoiser.getOutputBeauty());
+            } else {
+                bmp = m_film->toBitmap();
+            }
             bmp->saveEXR(path);
             delete bmp;
         }
@@ -138,10 +143,10 @@ FutabaScreen::FutabaScreen(int width, int height)
     
 
     new Label(window, "Integrator", "sans-bold");
-    ComboBox *integratorCombo =
+    m_integratorCombo =
             new ComboBox(window, {"Path", "Normals", "Depth", "Albedo", "Phong", "Primitives", "Heatmap", "VolPath"});
-    integratorCombo->setSelectedIndex((int)m_integratorMode);
-    integratorCombo->setCallback([this](int index) {
+    m_integratorCombo->setSelectedIndex((int)m_integratorMode);
+    m_integratorCombo->setCallback([this](int index) {
         m_integratorMode = index;
         if (m_phongWindow)
             m_phongWindow->setVisible(index == futaba::INTEGRATOR_PHONG);
@@ -178,7 +183,6 @@ FutabaScreen::FutabaScreen(int width, int height)
         tonemmapCombo->setFixedWidth(130);
         tonemmapCombo->setCallback([this](int index) {
             m_tonemappingMode = index;
-            m_film->clear();
         });
 
         // 2. Denoiser dropdown (shifted from the main sidebar)
@@ -188,7 +192,6 @@ FutabaScreen::FutabaScreen(int width, int height)
         denoiserCombo->setFixedWidth(130);
         denoiserCombo->setCallback([this](int index) {
             m_useDenoiser = (index == 1);
-            m_film->clear();
         });
 
         // 3. Path Guiding dropdown (skeleton setup)
@@ -206,11 +209,27 @@ FutabaScreen::FutabaScreen(int width, int height)
             m_film->clear();
         });
 
-        guidingCombo->setCallback([this, cbTraining](int index) {
-            m_pathGuidingMode = index;
-            if (index != 0 && !m_collectTraining) {
-                m_collectTraining = true;
-                cbTraining->setChecked(true);
+        guidingCombo->setCallback([this, cbTraining, guidingCombo](int index) {
+            try {
+                if (index == 1) {
+                    guidingCombo->setSelectedIndex(0);
+                    m_pathGuidingMode = 0;
+                    throw std::runtime_error("SD-Tree (PPG) is not implemented yet.");
+                } else if (index == 2) {
+                    guidingCombo->setSelectedIndex(0);
+                    m_pathGuidingMode = 0;
+                    throw std::runtime_error("VMM (Mixture) is not implemented yet.");
+                } else {
+                    m_pathGuidingMode = index;
+                    if (index != 0 && !m_collectTraining) {
+                        m_collectTraining = true;
+                        cbTraining->setChecked(true);
+                    }
+                }
+            } catch (const std::exception& e) {
+                auto dlg = new MessageDialog(this, MessageDialog::Type::Warning,
+                                             "Error", e.what());
+                (void)dlg;
             }
             m_film->clear();
         });
@@ -486,7 +505,8 @@ FutabaScreen::~FutabaScreen() {
 }
 
 bool FutabaScreen::loadScene(const std::string &xmlPath) {
-    clearTextures();
+    try {
+        clearTextures();
     SceneLoader loader;
     LoadedScene loaded;
     std::string error;
@@ -625,6 +645,19 @@ bool FutabaScreen::loadScene(const std::string &xmlPath) {
     m_scene.use_vertex_normals = m_useVertexNormals;
     m_scene.use_nee = m_useNEE;
 
+    m_scene.hasMedium = loaded.hasMedium;
+    m_scene.mediumMeshId = loaded.mediumMeshId;
+    m_scene.medium = Medium(MEDIUM_HOMOGENEOUS, HomogeneousMedium(loaded.mediumSigmaS, loaded.mediumSigmaA, loaded.mediumG));
+
+    if (loaded.integratorType == "volpath") {
+        m_integratorMode = futaba::INTEGRATOR_VOLPATH;
+    } else {
+        m_integratorMode = futaba::INTEGRATOR_PATH;
+    }
+    if (m_integratorCombo != nullptr) {
+        m_integratorCombo->setSelectedIndex(m_integratorMode);
+    }
+
     if (loaded.hasCamera) {
         int fw, fh;
         glfwGetFramebufferSize(glfwWindow(), &fw, &fh);
@@ -663,6 +696,12 @@ bool FutabaScreen::loadScene(const std::string &xmlPath) {
     performLayout();
     m_film->clear();
     return true;
+    } catch (const std::exception &e) {
+        auto dlg = new MessageDialog(this, MessageDialog::Type::Warning,
+                                     "Scene load failed", e.what());
+        (void)dlg;
+        return false;
+    }
 }
 
 void FutabaScreen::renderLoop() {
@@ -671,129 +710,135 @@ void FutabaScreen::renderLoop() {
     int nbFrames = 0;
 
     while (!glfwWindowShouldClose(win)) {
-        glfwPollEvents();
+        try {
+            glfwPollEvents();
 
-        double currentTime = glfwGetTime();
-        float deltaTime = (float)(currentTime - lastFrameTime);
-        lastFrameTime = currentTime;
+            double currentTime = glfwGetTime();
+            float deltaTime = (float)(currentTime - lastFrameTime);
+            lastFrameTime = currentTime;
 
-        nbFrames++;
-        if (currentTime - lastTime >= 1.0) {
-            char buf[32];
-            snprintf(buf, sizeof(buf), "FPS: %.1f",
-                             (double)nbFrames / (currentTime - lastTime));
-            if (m_fpsLabel)
-                m_fpsLabel->setCaption(buf);
-            nbFrames = 0;
-            lastTime = currentTime;
-        }
+            nbFrames++;
+            if (currentTime - lastTime >= 1.0) {
+                char buf[32];
+                snprintf(buf, sizeof(buf), "FPS: %.1f",
+                                 (double)nbFrames / (currentTime - lastTime));
+                if (m_fpsLabel)
+                    m_fpsLabel->setCaption(buf);
+                nbFrames = 0;
+                lastTime = currentTime;
+            }
 
-        float spd = m_moveSpeed * deltaTime;
-        if (m_keys[GLFW_KEY_LEFT_SHIFT])
-            spd *= 3.f;
+            float spd = m_moveSpeed * deltaTime;
+            if (m_keys[GLFW_KEY_LEFT_SHIFT])
+                spd *= 3.f;
 
-        ::Vector3f fwd = m_camForward;
-        ::Vector3f up = m_camUp;
-        ::Vector3f right = normalize(cross(fwd, up));
+            ::Vector3f fwd = m_camForward;
+            ::Vector3f up = m_camUp;
+            ::Vector3f right = normalize(cross(fwd, up));
 
-        bool moved = false;
-        if (m_keys[GLFW_KEY_W]) {
-            m_camPos += fwd * spd;
-            moved = true;
-        }
-        if (m_keys[GLFW_KEY_S]) {
-            m_camPos += fwd * -spd;
-            moved = true;
-        }
-        if (m_keys[GLFW_KEY_D]) {
-            m_camPos += right * spd;
-            moved = true;
-        }
-        if (m_keys[GLFW_KEY_A]) {
-            m_camPos += right * -spd;
-            moved = true;
-        }
-        if (m_keys[GLFW_KEY_E]) {
-            m_camPos += up * spd;
-            moved = true;
-        }
-        if (m_keys[GLFW_KEY_Q]) {
-            m_camPos += up * -spd;
-            moved = true;
-        }
+            bool moved = false;
+            if (m_keys[GLFW_KEY_W]) {
+                m_camPos += fwd * spd;
+                moved = true;
+            }
+            if (m_keys[GLFW_KEY_S]) {
+                m_camPos += fwd * -spd;
+                moved = true;
+            }
+            if (m_keys[GLFW_KEY_D]) {
+                m_camPos += right * spd;
+                moved = true;
+            }
+            if (m_keys[GLFW_KEY_A]) {
+                m_camPos += right * -spd;
+                moved = true;
+            }
+            if (m_keys[GLFW_KEY_E]) {
+                m_camPos += up * spd;
+                moved = true;
+            }
+            if (m_keys[GLFW_KEY_Q]) {
+                m_camPos += up * -spd;
+                moved = true;
+            }
 
-        // Handle resize interactively in the loop (more reliable than callbacks on
-        // some platforms)
-        int fw, fh;
-        glfwGetFramebufferSize(win, &fw, &fh);
-        if (fw != m_renderWidth || fh != m_renderHeight) {
-            m_renderWidth = fw;
-            m_renderHeight = fh;
-            recreateRenderTargets(fw, fh);
-            moved = true; // Force camera update
-        }
+            // Handle resize interactively in the loop (more reliable than callbacks on
+            // some platforms)
+            int fw, fh;
+            glfwGetFramebufferSize(win, &fw, &fh);
+            if (fw != m_renderWidth || fh != m_renderHeight) {
+                m_renderWidth = fw;
+                m_renderHeight = fh;
+                recreateRenderTargets(fw, fh);
+                moved = true; // Force camera update
+            }
 
-        if (moved)
-            updateCamera();
+            if (moved)
+                updateCamera();
 
-        uchar4 *d_pbo_ptr;
-        size_t num_bytes;
-        cudaGraphicsMapResources(1, &m_cudaPboResource, 0);
-        cudaGraphicsResourceGetMappedPointer((void **)&d_pbo_ptr, &num_bytes,
-                                             m_cudaPboResource);
+            uchar4 *d_pbo_ptr;
+            size_t num_bytes;
+            cudaGraphicsMapResources(1, &m_cudaPboResource, 0);
+            cudaGraphicsResourceGetMappedPointer((void **)&d_pbo_ptr, &num_bytes,
+                                                 m_cudaPboResource);
 
-        uchar4 *d_vis_pbo_ptr = nullptr;
-        if (m_showVisualizer && m_cudaPboResourceVis) {
-            cudaGraphicsMapResources(1, &m_cudaPboResourceVis, 0);
-            cudaGraphicsResourceGetMappedPointer((void **)&d_vis_pbo_ptr, &num_bytes,
-                                                 m_cudaPboResourceVis);
-        }
+            uchar4 *d_vis_pbo_ptr = nullptr;
+            if (m_showVisualizer && m_cudaPboResourceVis) {
+                cudaGraphicsMapResources(1, &m_cudaPboResourceVis, 0);
+                cudaGraphicsResourceGetMappedPointer((void **)&d_vis_pbo_ptr, &num_bytes,
+                                                     m_cudaPboResourceVis);
+            }
 
-        launch_render(d_pbo_ptr, m_film, m_renderWidth, m_renderHeight, m_camera,
-                      m_scene, m_maxDepth, m_rrDepth, m_integratorMode,
-                      m_tonemappingMode, m_useAntialiasing, m_phongLightDir,
-                      m_phongAmbient, m_phongDiffuse, m_phongSpecular,
-                      m_phongShininess, m_useDenoiser,
-                      &m_denoiser, m_pathGuidingMode,
-                      m_collectTraining ? m_trainManager.getActive() : nullptr,
-                      m_collectTraining ? m_trainManager.getPosition() : nullptr,
-                      m_collectTraining ? m_trainManager.getNormals() : nullptr,
-                      m_collectTraining ? m_trainManager.getWi() : nullptr,
-                      m_collectTraining ? m_trainManager.getWo() : nullptr,
-                      m_collectTraining ? m_trainManager.getRadiance() : nullptr,
-                      m_collectTraining ? m_trainManager.getMaterialId() : nullptr,
-                      d_vis_pbo_ptr, m_visDepth, m_visBufferType, m_showVisualizer);
+            launch_render(d_pbo_ptr, m_film, m_renderWidth, m_renderHeight, m_camera,
+                          m_scene, m_maxDepth, m_rrDepth, m_integratorMode,
+                          m_tonemappingMode, m_useAntialiasing, m_phongLightDir,
+                          m_phongAmbient, m_phongDiffuse, m_phongSpecular,
+                          m_phongShininess, m_useDenoiser,
+                          &m_denoiser, m_pathGuidingMode,
+                          m_collectTraining ? m_trainManager.getActive() : nullptr,
+                          m_collectTraining ? m_trainManager.getPosition() : nullptr,
+                          m_collectTraining ? m_trainManager.getNormals() : nullptr,
+                          m_collectTraining ? m_trainManager.getWi() : nullptr,
+                          m_collectTraining ? m_trainManager.getWo() : nullptr,
+                          m_collectTraining ? m_trainManager.getRadiance() : nullptr,
+                          m_collectTraining ? m_trainManager.getMaterialId() : nullptr,
+                          d_vis_pbo_ptr, m_visDepth, m_visBufferType, m_showVisualizer);
 
-        cudaGraphicsUnmapResources(1, &m_cudaPboResource, 0);
-        if (m_showVisualizer && m_cudaPboResourceVis) {
-            cudaGraphicsUnmapResources(1, &m_cudaPboResourceVis, 0);
+            cudaGraphicsUnmapResources(1, &m_cudaPboResource, 0);
+            if (m_showVisualizer && m_cudaPboResourceVis) {
+                cudaGraphicsUnmapResources(1, &m_cudaPboResourceVis, 0);
 
-            // Copy visualizer PBO contents to the visualizer texture
-            glBindBuffer(GL_PIXEL_UNPACK_BUFFER, m_glPboVis);
-            glBindTexture(GL_TEXTURE_2D, m_glTexVis);
+                // Copy visualizer PBO contents to the visualizer texture
+                glBindBuffer(GL_PIXEL_UNPACK_BUFFER, m_glPboVis);
+                glBindTexture(GL_TEXTURE_2D, m_glTexVis);
+                glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, m_renderWidth, m_renderHeight,
+                                GL_RGBA, GL_UNSIGNED_BYTE, 0);
+                glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
+            }
+
+            glBindBuffer(GL_PIXEL_UNPACK_BUFFER, m_glPbo);
+            glBindTexture(GL_TEXTURE_2D, m_glTex);
             glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, m_renderWidth, m_renderHeight,
-                            GL_RGBA, GL_UNSIGNED_BYTE, 0);
+                                            GL_RGBA, GL_UNSIGNED_BYTE, 0);
             glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
+
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, m_fbo);
+            glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                                                         GL_TEXTURE_2D, m_glTex, 0);
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+            glfwGetFramebufferSize(win, &fw, &fh);
+            glBlitFramebuffer(0, 0, m_renderWidth, m_renderHeight, 0, fh, fw, 0,
+                                                GL_COLOR_BUFFER_BIT, GL_NEAREST);
+
+            drawContents();
+            drawGizmo();
+            drawWidgets();
+            glfwSwapBuffers(win);
+        } catch (const std::exception& e) {
+            auto dlg = new MessageDialog(this, MessageDialog::Type::Warning,
+                                         "Error", e.what());
+            (void)dlg;
         }
-
-        glBindBuffer(GL_PIXEL_UNPACK_BUFFER, m_glPbo);
-        glBindTexture(GL_TEXTURE_2D, m_glTex);
-        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, m_renderWidth, m_renderHeight,
-                                        GL_RGBA, GL_UNSIGNED_BYTE, 0);
-        glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
-
-        glBindFramebuffer(GL_READ_FRAMEBUFFER, m_fbo);
-        glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
-                                                     GL_TEXTURE_2D, m_glTex, 0);
-        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
-        glfwGetFramebufferSize(win, &fw, &fh);
-        glBlitFramebuffer(0, 0, m_renderWidth, m_renderHeight, 0, fh, fw, 0,
-                                            GL_COLOR_BUFFER_BIT, GL_NEAREST);
-
-        drawContents();
-        drawGizmo();
-        drawWidgets();
-        glfwSwapBuffers(win);
     }
 }
 

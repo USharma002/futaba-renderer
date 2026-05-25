@@ -52,6 +52,7 @@ private:
   nanogui::Slider *m_fovSlider = nullptr;
   nanogui::Slider *m_focusSlider = nullptr;
   nanogui::Slider *m_apertureSlider = nullptr;
+  nanogui::ComboBox *m_integratorCombo = nullptr;
   int m_maxDepth = 12;
   int m_rrDepth = 5;
   int m_integratorMode = futaba::INTEGRATOR_PATH;

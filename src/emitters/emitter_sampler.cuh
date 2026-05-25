@@ -17,22 +17,54 @@ struct UniformEmitterSampler {
                    EmitterSample&             es) const
     {
         const bool have_area = (scene.emissiveTriCount > 0);
+        const bool have_nonarea = (scene.nonAreaEmitterCount > 0 && scene.nonAreaEmitterIndices != nullptr);
         const bool have_env  = scene.envMap.isActive();
 
-        if (!have_area && !have_env) return false;
+        int num_categories = 0;
+        if (have_area) num_categories++;
+        if (have_nonarea) num_categories++;
+        if (have_env) num_categories++;
 
-        // Area light sampling (priority over env map when both exist)
+        if (num_categories == 0) return false;
+
+        const float select_prob = 1.f / num_categories;
+        int cat_idx = (int)(u.x * (float)num_categories);
+        if (cat_idx > num_categories - 1) cat_idx = num_categories - 1;
+
+        const float new_ux = fminf((u.x - cat_idx * select_prob) * num_categories, 0.999999f);
+        const Point3f new_u(new_ux, u.y, u.z);
+
+        int current_cat = 0;
+
         if (have_area) {
-            AreaEmitter area_emitter;
-            return area_emitter.sample(scene, ref, u, es);
+            if (current_cat == cat_idx) {
+                AreaEmitter area_emitter;
+                if (!area_emitter.sample(scene, ref, new_u, es)) return false;
+                es.pdf *= select_prob;
+                return true;
+            }
+            current_cat++;
         }
 
-        // Non-area emitters (point / directional) when no area lights
-        if (scene.nonAreaEmitterCount > 0 && scene.nonAreaEmitterIndices)
-            return sample_non_area(scene, ref, u, es);
+        if (have_nonarea) {
+            if (current_cat == cat_idx) {
+                if (!sample_non_area(scene, ref, new_u, es)) return false;
+                es.pdf *= select_prob;
+                return true;
+            }
+            current_cat++;
+        }
 
-        // Env-map fallback
-        return sample_env(scene, u, es);
+        if (have_env) {
+            if (current_cat == cat_idx) {
+                if (!sample_env(scene, new_u, es)) return false;
+                es.pdf *= select_prob;
+                return true;
+            }
+            current_cat++;
+        }
+
+        return false;
     }
 
     HD float pdf(const Scene&   scene,
@@ -40,13 +72,31 @@ struct UniformEmitterSampler {
                  const Vector3f& wi,
                  float           dist) const
     {
+        const bool have_area = (scene.emissiveTriCount > 0);
+        const bool have_nonarea = (scene.nonAreaEmitterCount > 0 && scene.nonAreaEmitterIndices != nullptr);
+        const bool have_env  = scene.envMap.isActive();
+
+        int num_categories = 0;
+        if (have_area) num_categories++;
+        if (have_nonarea) num_categories++;
+        if (have_env) num_categories++;
+
+        if (num_categories == 0) return 0.f;
+        const float select_prob = 1.f / num_categories;
+
         if (emitter_primitive_id < 0) {
-            if (scene.emissiveTriCount > 0) return 0.f;
-            return scene.envMap.isActive() ? scene.envMap.pdf(wi) : 0.f;
+            if (have_env) {
+                return select_prob * scene.envMap.pdf(wi);
+            }
+            return 0.f;
         }
 
-        AreaEmitter area_emitter;
-        return area_emitter.pdf(scene, emitter_primitive_id, wi, dist);
+        if (have_area) {
+            AreaEmitter area_emitter;
+            return select_prob * area_emitter.pdf(scene, emitter_primitive_id, wi, dist);
+        }
+
+        return 0.f;
     }
 
 private:
@@ -56,8 +106,8 @@ private:
                             const Point3f& u,
                             EmitterSample& es) const
     {
-        const int sel = std::min((int)(u.x * (float)scene.nonAreaEmitterCount),
-                            scene.nonAreaEmitterCount - 1);
+        int sel = (int)(u.x * (float)scene.nonAreaEmitterCount);
+        if (sel > scene.nonAreaEmitterCount - 1) sel = scene.nonAreaEmitterCount - 1;
         const int eid = scene.nonAreaEmitterIndices[sel];
         if (eid < 0 || (uint32_t)eid >= scene.emitterCount) return false;
 

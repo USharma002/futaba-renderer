@@ -21,7 +21,7 @@ struct Warp {
         return 0.0f;
     }
 
-    HD static Vector3f squareToUniformSphere(const Point3f& sample2){
+    HD static Vector3f squareToUniformSphere(const Point2f& sample2){
         float phi = 2.0f * M_PI * sample2.x;
         float cos_theta = 1.0f - 2.0f * sample2.y;
         float sin_theta = sqrtf(1.0f - cos_theta * cos_theta);

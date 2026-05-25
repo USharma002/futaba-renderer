@@ -34,6 +34,7 @@ public:
     // Getters for guide buffers (allocated on GPU inside the denoiser manager)
     Color3f* getAlbedoBuffer() const { return m_dAlbedoBuffer; }
     Color3f* getNormalBuffer() const { return m_dNormalBuffer; }
+    float* getOutputBeauty() const { return m_dOutputBeauty; }
 
 private:
     OptixDeviceContext m_context;

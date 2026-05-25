@@ -11,6 +11,7 @@
 #include "distribution.cuh"
 #include "emitter.cuh"
 #include "mesh.cuh"
+#include "medium.cuh"
 
 namespace futaba {
 
@@ -58,6 +59,10 @@ struct Scene {
 
     bool            use_vertex_normals = false;
     bool            use_nee = true;
+
+    bool            hasMedium = false;
+    int             mediumMeshId = -1;
+    Medium          medium;
 
     // -----------------------------------------------------------------------
     // Intersection

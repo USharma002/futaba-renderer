@@ -172,6 +172,7 @@ public:
   OptixShaderBindingTable sbt = {};
   CUdeviceptr d_params = 0;
   OptixModule module = nullptr;
+  CUdeviceptr d_raygenRecordsBase = 0;
 
   void init() {
     if (pipeline)
@@ -215,14 +216,32 @@ public:
 
     // 3. Program Groups
     OptixProgramGroupOptions pgOptions = {};
-    OptixProgramGroup raygenProgGroup;
-    OptixProgramGroupDesc raygenDesc = {};
-    raygenDesc.kind = OPTIX_PROGRAM_GROUP_KIND_RAYGEN;
-    raygenDesc.raygen.module = module;
-    raygenDesc.raygen.entryFunctionName = "__raygen__render";
+    OptixProgramGroup raygenProgGroupRender;
+    OptixProgramGroupDesc raygenDescRender = {};
+    raygenDescRender.kind = OPTIX_PROGRAM_GROUP_KIND_RAYGEN;
+    raygenDescRender.raygen.module = module;
+    raygenDescRender.raygen.entryFunctionName = "__raygen__render";
     sizeof_log = sizeof(log);
-    optixProgramGroupCreate(context, &raygenDesc, 1, &pgOptions, log,
-                            &sizeof_log, &raygenProgGroup);
+    optixProgramGroupCreate(context, &raygenDescRender, 1, &pgOptions, log,
+                            &sizeof_log, &raygenProgGroupRender);
+
+    OptixProgramGroup raygenProgGroupPath;
+    OptixProgramGroupDesc raygenDescPath = {};
+    raygenDescPath.kind = OPTIX_PROGRAM_GROUP_KIND_RAYGEN;
+    raygenDescPath.raygen.module = module;
+    raygenDescPath.raygen.entryFunctionName = "__raygen__path";
+    sizeof_log = sizeof(log);
+    optixProgramGroupCreate(context, &raygenDescPath, 1, &pgOptions, log,
+                            &sizeof_log, &raygenProgGroupPath);
+
+    OptixProgramGroup raygenProgGroupVolPath;
+    OptixProgramGroupDesc raygenDescVolPath = {};
+    raygenDescVolPath.kind = OPTIX_PROGRAM_GROUP_KIND_RAYGEN;
+    raygenDescVolPath.raygen.module = module;
+    raygenDescVolPath.raygen.entryFunctionName = "__raygen__volpath";
+    sizeof_log = sizeof(log);
+    optixProgramGroupCreate(context, &raygenDescVolPath, 1, &pgOptions, log,
+                            &sizeof_log, &raygenProgGroupVolPath);
 
     OptixProgramGroup missProgGroup;
     OptixProgramGroupDesc missDesc = {};
@@ -263,24 +282,29 @@ public:
                             &sizeof_log, &shadowHitProgGroup);
 
     // 4. Create Pipeline
-    OptixProgramGroup programGroups[] = {raygenProgGroup, missProgGroup,
-                                         hitProgGroup, shadowMissProgGroup,
+    OptixProgramGroup programGroups[] = {raygenProgGroupRender,
+                                         raygenProgGroupPath,
+                                         raygenProgGroupVolPath,
+                                         missProgGroup,
+                                         hitProgGroup,
+                                         shadowMissProgGroup,
                                          shadowHitProgGroup};
     OptixPipelineLinkOptions pipelineLinkOptions = {};
     pipelineLinkOptions.maxTraceDepth = 1;
 
     sizeof_log = sizeof(log);
     optixPipelineCreate(context, &pipelineCompileOptions, &pipelineLinkOptions,
-                        programGroups, 5, log, &sizeof_log, &pipeline);
+                        programGroups, 7, log, &sizeof_log, &pipeline);
 
     // 5. Build SBT
-    std::vector<EmptyRecord> raygenRecords(1);
-    optixSbtRecordPackHeader(raygenProgGroup, &raygenRecords[0]);
-    CUdeviceptr d_raygenRecord;
-    cudaMalloc(reinterpret_cast<void **>(&d_raygenRecord), sizeof(EmptyRecord));
-    cudaMemcpy(reinterpret_cast<void *>(d_raygenRecord), raygenRecords.data(),
-               sizeof(EmptyRecord), cudaMemcpyHostToDevice);
-    sbt.raygenRecord = d_raygenRecord;
+    std::vector<EmptyRecord> raygenRecords(3);
+    optixSbtRecordPackHeader(raygenProgGroupRender, &raygenRecords[0]);
+    optixSbtRecordPackHeader(raygenProgGroupPath, &raygenRecords[1]);
+    optixSbtRecordPackHeader(raygenProgGroupVolPath, &raygenRecords[2]);
+    cudaMalloc(reinterpret_cast<void **>(&d_raygenRecordsBase), 3 * sizeof(EmptyRecord));
+    cudaMemcpy(reinterpret_cast<void *>(d_raygenRecordsBase), raygenRecords.data(),
+               3 * sizeof(EmptyRecord), cudaMemcpyHostToDevice);
+    sbt.raygenRecord = d_raygenRecordsBase;
 
     std::vector<EmptyRecord> missRecords(2);
     optixSbtRecordPackHeader(missProgGroup, &missRecords[0]);
@@ -384,6 +408,14 @@ void launch_render(uchar4 *d_buffer, HDRFilm *film, int width, int height,
 
   cudaMemcpy(reinterpret_cast<void *>(g_pipeline.d_params), &params,
              sizeof(LaunchParams), cudaMemcpyHostToDevice);
+
+  int raygen_idx = 0; // default to render/preview
+  if (integrator_mode == INTEGRATOR_PATH) {
+      raygen_idx = 1;
+  } else if (integrator_mode == INTEGRATOR_VOLPATH) {
+      raygen_idx = 2;
+  }
+  g_pipeline.sbt.raygenRecord = g_pipeline.d_raygenRecordsBase + raygen_idx * sizeof(EmptyRecord);
 
   optixLaunch(g_pipeline.pipeline,
               0, // stream

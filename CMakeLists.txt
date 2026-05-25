@@ -64,6 +64,8 @@ set(APP_INCLUDES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/materials
     ${CMAKE_CURRENT_SOURCE_DIR}/src/denoiser
     ${CMAKE_CURRENT_SOURCE_DIR}/src/guiding
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/phase
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/medium
     ${CMAKE_CURRENT_SOURCE_DIR}/ext/nanogui/include
     ${CMAKE_CURRENT_SOURCE_DIR}/ext/pugixml/src
     ${CMAKE_CURRENT_SOURCE_DIR}/ext/tinyexr
@@ -103,11 +105,20 @@ add_custom_command(
             "${CMAKE_CURRENT_SOURCE_DIR}/src/guiding/guiding.h"
             "${CMAKE_CURRENT_SOURCE_DIR}/src/guiding/guiding_device.cuh"
             "${CMAKE_CURRENT_SOURCE_DIR}/src/emitters/emitter.cuh"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/emitters/emitter_sample.cuh"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/emitters/emitter_sampler.cuh"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/emitters/area.cuh"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/emitters/envmap.cuh"
             "${CMAKE_CURRENT_SOURCE_DIR}/src/scene/mesh.cuh"
             "${CMAKE_CURRENT_SOURCE_DIR}/src/integrator/heatmap.cuh"
             "${CMAKE_CURRENT_SOURCE_DIR}/src/integrator/path.cuh"
             "${CMAKE_CURRENT_SOURCE_DIR}/src/accel/bvh.cuh"
             "${CMAKE_CURRENT_SOURCE_DIR}/src/scene/scene.cuh"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/phase/phase_function.cuh"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/phase/henyey_greenstein.cuh"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/phase/isotropic.cuh"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/medium/medium.cuh"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/medium/homogeneous.cuh"
 )
 add_custom_target(compile_ptx DEPENDS "${PTX_FILE}")
 add_dependencies(app compile_ptx)

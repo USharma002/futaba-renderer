@@ -133,6 +133,7 @@ inline Material makeMaterialFromPropertyLists(
     if (type == "dielectric") return make_dielectric_material(bsdfProps, emitterProps);
     if (type == "mirror")     return make_mirror_material    (bsdfProps, emitterProps);
     if (type == "diffuse")    return make_diffuse_material   (bsdfProps, emitterProps);
+    if (type == "null")       return Material(Color3f(0.f), Color3f(0.f), BSDF_ID_NULL, 1.f, 1.f, 0.f);
     if (type == "microfacet") return make_microfacet_material(bsdfProps, emitterProps);
     if (type == "roughplastic") return make_roughplastic_material(bsdfProps, emitterProps);
     if (type == "roughdielectric") return make_roughdielectric_material(bsdfProps, emitterProps);

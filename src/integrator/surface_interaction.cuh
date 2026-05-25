@@ -95,6 +95,13 @@ struct SurfaceIntersection {
                 Mirror bsdf(albedo);
                 return bsdf.sample(bs, s2);
             }
+            case BSDF_ID_NULL: {
+                bs.wo = -bs.wi;
+                bs.sampled_type = BSDF_ID_NULL;
+                bs.pdf = 1.0f;
+                bs.eta = 1.0f;
+                return Color3f(1.0f);
+            }
             default: {
                 Diffuse bsdf(albedo);
                 return bsdf.sample(bs, s2);
@@ -139,6 +146,11 @@ struct SurfaceIntersection {
                 Mirror bsdf(albedo);
                 f_out   = bsdf.eval(bs);
                 pdf_out = bsdf.pdf(bs);
+                return;
+            }
+            case BSDF_ID_NULL: {
+                f_out = Color3f(0.f);
+                pdf_out = 0.f;
                 return;
             }
             default: {
