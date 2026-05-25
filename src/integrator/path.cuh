@@ -5,6 +5,7 @@
 #include "sampler.cuh"
 #include "scene.cuh"
 #include "surface_interaction.cuh"
+#include "guiding_device.cuh"
 #include <cmath>
 
 namespace futaba {
@@ -119,50 +120,42 @@ struct Path {
     return is_self || is_delta;
     }
 
-    HD Color3f sample(const Ray& ray, const Scene& scene, Sampler& sampler,
-                      const TrainingBuffers& tb = TrainingBuffers()) const
+    template<bool RecordDenoiseGuides>
+    HD void record_denoiser_guides(const SurfaceIntersection& si, bool hit, int depth, const Ray& current_ray,
+                                   Color3f* denoise_albedo_buffer, Color3f* denoise_normal_buffer,
+                                   int pixel_index, int sample_count, const PerspectiveCamera* camera,
+                                   const Scene& scene) const
     {
-        Color3f L(0.f), beta(1.f);
-        float   eta = 1.f;
-        Ray     current_ray = ray;
-
-        float   prev_bsdf_pdf   = 1.f;
-        bool    prev_bsdf_delta = true;
-        Point3f prev_p          = ray.o;
-
-        bool record_training = (tb.active && tb.pixel_index >= 0);
-
-        // Pre-clear active flags when recording
-        if (record_training) {
-            for (int d = 0; d < tb.max_depth; ++d) {
-                int buf_idx = d * tb.img_size + tb.pixel_index;
-                tb.active[buf_idx] = 0.0f;
+        if constexpr (RecordDenoiseGuides) {
+            if (depth == 0) {
+                Color3f alb(0.f);
+                Vector3f norm(0.f);
+                if (hit) {
+                    alb = si.albedo;
+                    if (camera) {
+                        norm = Vector3f(dot(si.n, camera->right),
+                                        dot(si.n, camera->trueUp),
+                                        dot(si.n, camera->forward));
+                    }
+                } else {
+                    alb = scene.eval_environment(current_ray.d);
+                }
+                if (sample_count == 1) {
+                    denoise_albedo_buffer[pixel_index] = alb;
+                    denoise_normal_buffer[pixel_index] = norm;
+                } else {
+                    denoise_albedo_buffer[pixel_index] += alb;
+                    denoise_normal_buffer[pixel_index] += norm;
+                }
             }
         }
+    }
 
-        // Local register arrays for backward radiance propagation.
-        // Only allocated when training is active to avoid register spill.
-        const int MAX_LOCAL_DEPTH = 32;
-        Color3f local_Le[MAX_LOCAL_DEPTH];
-        Color3f local_nee[MAX_LOCAL_DEPTH];
-        Color3f local_bsdf[MAX_LOCAL_DEPTH];
-
-        if (record_training) {
-            for (int i = 0; i < MAX_LOCAL_DEPTH; ++i) {
-                local_Le[i] = Color3f(0.f);
-                local_nee[i] = Color3f(0.f);
-                local_bsdf[i] = Color3f(0.f);
-            }
-        }
-
-        int final_depth = 0;
-
-        for (int depth = 0; depth < max_depth; ++depth) {
-            final_depth = depth + 1;
-            SurfaceIntersection si;
-            bool hit = scene.intersect(current_ray, current_ray.mint, current_ray.maxt, si);
-
-            // Record training features for this bounce (input features)
+    template<bool RecordTraining>
+    HD void record_training_features(const SurfaceIntersection& si, bool hit, int depth, const Ray& current_ray,
+                                     const TrainingBuffers& tb, bool record_training) const
+    {
+        if constexpr (RecordTraining) {
             if (record_training && depth < tb.max_depth) {
                 int buf_idx = depth * tb.img_size + tb.pixel_index;
                 tb.active[buf_idx] = 1.0f;
@@ -177,12 +170,104 @@ struct Path {
                     if (tb.material_id) tb.material_id[buf_idx] = -1.0f;
                 }
             }
+        }
+    }
+
+    template<bool RecordTraining>
+    HD void backward_propagate_radiance(int final_depth, const TrainingBuffers& tb, bool record_training,
+                                        const Color3f* local_Le, const Color3f* local_nee, const Color3f* local_bsdf) const
+    {
+        if constexpr (RecordTraining) {
+            if (record_training && tb.radiance) {
+                Color3f incoming = Color3f(0.f);
+                constexpr int MAX_LOCAL_DEPTH = 16;
+                int start_depth = (final_depth < MAX_LOCAL_DEPTH) ? final_depth - 1 : MAX_LOCAL_DEPTH - 1;
+                for (int d = start_depth; d >= 0; --d) {
+                    if (d < tb.max_depth) {
+                        int buf_idx = d * tb.img_size + tb.pixel_index;
+                        if (tb.active[buf_idx] > 0.5f) {
+                            incoming = local_Le[d] + local_nee[d] + local_bsdf[d] * incoming;
+                            tb.radiance[buf_idx] = incoming;
+                        } else {
+                            incoming = Color3f(0.f);
+                            tb.radiance[buf_idx] = Color3f(0.f);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    template<bool RecordTraining = false, bool RecordDenoiseGuides = false>
+    HD Color3f sample(const Ray& ray, const Scene& scene, Sampler& sampler,
+                      const TrainingBuffers& tb = TrainingBuffers(),
+                      Color3f* denoise_albedo_buffer = nullptr,
+                      Color3f* denoise_normal_buffer = nullptr,
+                      int pixel_index = -1,
+                      int sample_count = 1,
+                      const PerspectiveCamera* camera = nullptr) const
+    {
+        Color3f L(0.f), beta(1.f);
+        float   eta = 1.f;
+        Ray     current_ray = ray;
+
+        float   prev_bsdf_pdf   = 1.f;
+        bool    prev_bsdf_delta = true;
+        Point3f prev_p          = ray.o;
+
+        [[maybe_unused]] bool record_training = RecordTraining && (tb.active != nullptr);
+
+        // Pre-clear active flags when recording
+        if constexpr (RecordTraining) {
+            if (record_training) {
+                for (int d = 0; d < tb.max_depth; ++d) {
+                    int buf_idx = d * tb.img_size + tb.pixel_index;
+                    tb.active[buf_idx] = 0.0f;
+                }
+            }
+        }
+
+        // Local register arrays for backward radiance propagation.
+        // Only allocated when training is active to avoid register spill.
+        constexpr int MAX_LOCAL_DEPTH = RecordTraining ? 16 : 1;
+        Color3f local_Le[MAX_LOCAL_DEPTH];
+        Color3f local_nee[MAX_LOCAL_DEPTH];
+        Color3f local_bsdf[MAX_LOCAL_DEPTH];
+
+        if constexpr (RecordTraining) {
+            if (record_training) {
+                for (int i = 0; i < MAX_LOCAL_DEPTH; ++i) {
+                    local_Le[i] = Color3f(0.f);
+                    local_nee[i] = Color3f(0.f);
+                    local_bsdf[i] = Color3f(0.f);
+                }
+            }
+        }
+
+        [[maybe_unused]] int final_depth = 0;
+
+        for (int depth = 0; depth < max_depth; ++depth) {
+            if constexpr (RecordTraining) {
+                final_depth = depth + 1;
+            }
+            SurfaceIntersection si;
+            bool hit = scene.intersect(current_ray, current_ray.mint, current_ray.maxt, si);
+
+            // Record denoiser guides at the first bounce
+            record_denoiser_guides<RecordDenoiseGuides>(si, hit, depth, current_ray,
+                                                       denoise_albedo_buffer, denoise_normal_buffer,
+                                                       pixel_index, sample_count, camera, scene);
+
+            // Record training features for this bounce
+            record_training_features<RecordTraining>(si, hit, depth, current_ray, tb, record_training);
 
             if (!hit) {
                 // Environment emission
                 const Color3f Le = scene.eval_environment(current_ray.d);
-                if (record_training && depth < MAX_LOCAL_DEPTH) {
-                    local_Le[depth] = Le;
+                if constexpr (RecordTraining) {
+                    if (record_training && depth < MAX_LOCAL_DEPTH) {
+                        local_Le[depth] = Le;
+                    }
                 }
                 if (Le.x > 0.f || Le.y > 0.f || Le.z > 0.f) {
                     float w = 1.f;
@@ -201,8 +286,10 @@ struct Path {
                                                prev_bsdf_pdf, prev_bsdf_delta);
             L += beta * emission;
 
-            if (record_training && depth < MAX_LOCAL_DEPTH) {
-                local_Le[depth] = emission;
+            if constexpr (RecordTraining) {
+                if (record_training && depth < MAX_LOCAL_DEPTH) {
+                    local_Le[depth] = emission;
+                }
             }
 
             // NEE direct lighting
@@ -211,8 +298,10 @@ struct Path {
                 nee_val = nee_contribution(scene, si, sampler);
                 L += beta * nee_val;
             }
-            if (record_training && depth < MAX_LOCAL_DEPTH) {
-                local_nee[depth] = nee_val;
+            if constexpr (RecordTraining) {
+                if (record_training && depth < MAX_LOCAL_DEPTH) {
+                    local_nee[depth] = nee_val;
+                }
             }
 
             // BSDF sample
@@ -221,12 +310,14 @@ struct Path {
             if (!bs.is_valid()) break;
 
             // Record bsdf weight and wo direction
-            if (record_training && depth < MAX_LOCAL_DEPTH) {
-                local_bsdf[depth] = bsdf_w * bs.pdf;
-            }
-            if (record_training && depth < tb.max_depth && tb.wo) {
-                int buf_idx = depth * tb.img_size + tb.pixel_index;
-                tb.wo[buf_idx] = bs.wo;
+            if constexpr (RecordTraining) {
+                if (record_training && depth < MAX_LOCAL_DEPTH) {
+                    local_bsdf[depth] = bsdf_w * bs.pdf;
+                }
+                if (record_training && depth < tb.max_depth && tb.wo) {
+                    int buf_idx = depth * tb.img_size + tb.pixel_index;
+                    tb.wo[buf_idx] = bs.wo;
+                }
             }
 
             beta *= bsdf_w;
@@ -250,22 +341,7 @@ struct Path {
         }
 
         // Backward propagation of radiance from local register arrays
-        if (record_training && tb.radiance) {
-            Color3f incoming = Color3f(0.f);
-            int start_depth = (final_depth < MAX_LOCAL_DEPTH) ? final_depth - 1 : MAX_LOCAL_DEPTH - 1;
-            for (int d = start_depth; d >= 0; --d) {
-                if (d < tb.max_depth) {
-                    int buf_idx = d * tb.img_size + tb.pixel_index;
-                    if (tb.active[buf_idx] > 0.5f) {
-                        incoming = local_Le[d] + local_nee[d] + local_bsdf[d] * incoming;
-                        tb.radiance[buf_idx] = incoming;
-                    } else {
-                        incoming = Color3f(0.f);
-                        tb.radiance[buf_idx] = Color3f(0.f);
-                    }
-                }
-            }
-        }
+        backward_propagate_radiance<RecordTraining>(final_depth, tb, record_training, local_Le, local_nee, local_bsdf);
 
         return L;
     }

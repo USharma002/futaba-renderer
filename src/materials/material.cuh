@@ -22,18 +22,19 @@ struct Material {
     float    intIOR;
     bool     isConductor;
     BSDFType type;
+    cudaTextureObject_t texObj;
 
     HD Material()
         : albedo(0.5f), specular(1.0f), emission(0.0f), conductorEta(0.f), conductorK(1.f),
-          alpha(1.0f), extIOR(1.000277f), intIOR(1.5f), isConductor(false), type(BSDF_ID_DIFFUSE) {}
+          alpha(1.0f), extIOR(1.000277f), intIOR(1.5f), isConductor(false), type(BSDF_ID_DIFFUSE), texObj(0) {}
 
     HD Material(const Color3f& a, const Color3f& e = Color3f(0.0f))
         : albedo(a), specular(1.0f), emission(e), conductorEta(0.f), conductorK(1.f),
-          alpha(1.0f), extIOR(1.000277f), intIOR(1.5f), isConductor(false), type(BSDF_ID_DIFFUSE) {}
+          alpha(1.0f), extIOR(1.000277f), intIOR(1.5f), isConductor(false), type(BSDF_ID_DIFFUSE), texObj(0) {}
 
     HD Material(const Color3f& a, const Color3f& e, BSDFType t, float extIor, float intIor, float roughness)
         : albedo(a), specular(1.0f), emission(e), conductorEta(0.f), conductorK(1.f),
-          alpha(roughness), extIOR(extIor), intIOR(intIor), isConductor(false), type(t){}
+          alpha(roughness), extIOR(extIor), intIOR(intIor), isConductor(false), type(t), texObj(0){}
 };
 
 } // namespace futaba

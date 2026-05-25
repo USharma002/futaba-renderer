@@ -12,6 +12,10 @@ struct Triangle {
     int material_id;          // Material ID (4 bytes)
     int mesh_id = -1;         // Mesh ID (4 bytes)
     bool has_normals = false; // Whether the triangle has vertex normals (1 byte, but will be padded to 4 bytes)
+    bool has_uvs = false;     // Whether the triangle has vertex UV coordinates
+    Point2f uv0 = Point2f(0.f);
+    Point2f uv1 = Point2f(0.f);
+    Point2f uv2 = Point2f(0.f);
 
     // Triangle vertices and normals in world space
     Point3f p0;
@@ -68,7 +72,15 @@ struct Triangle {
         rec.primitive_id = primitive_id;
         
         rec.front_face = dot(r.d, face_n) < 0.0f;
-        rec.uv = Point2f(u, v);
+        if (has_uvs) {
+            float w = 1.0f - u - v;
+            rec.uv = Point2f(
+                uv0.x * w + uv1.x * u + uv2.x * v,
+                uv0.y * w + uv1.y * u + uv2.y * v
+            );
+        } else {
+            rec.uv = Point2f(u, v);
+        }
         Vector3f frame_n = rec.front_face ? rec.n : -rec.n;
         rec.set_frame_from_normal(frame_n);
 

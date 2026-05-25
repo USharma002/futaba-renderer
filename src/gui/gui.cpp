@@ -8,10 +8,15 @@
 #include <functional>
 #include <iostream>
 #include <fstream>
+#include <stb_image.h>
 
 using namespace nanogui;
 using namespace futaba;
 namespace fs = std::filesystem;
+
+static cudaTextureObject_t createCudaTexture(const std::string& filename,
+                                             std::vector<cudaArray*>& allocatedArrays,
+                                             std::vector<cudaTextureObject_t>& allocatedTextures);
 
 static constexpr float kMinFov = 5.f;
 static constexpr float kMaxFov = 120.f;
@@ -444,6 +449,7 @@ FutabaScreen::FutabaScreen(int width, int height)
 }
 
 FutabaScreen::~FutabaScreen() {
+    clearTextures();
     delete m_film;
     m_film = nullptr;
     m_scene.clear();
@@ -480,6 +486,7 @@ FutabaScreen::~FutabaScreen() {
 }
 
 bool FutabaScreen::loadScene(const std::string &xmlPath) {
+    clearTextures();
     SceneLoader loader;
     LoadedScene loaded;
     std::string error;
@@ -492,22 +499,22 @@ bool FutabaScreen::loadScene(const std::string &xmlPath) {
     }
 
     m_scene.clear();
+
+    std::string baseDir = fs::path(xmlPath).parent_path().string();
+    if (baseDir.empty()) baseDir = ".";
+    for (size_t i = 0; i < loaded.materials.size(); ++i) {
+        if (i < loaded.materialTexturePaths.size() && !loaded.materialTexturePaths[i].empty()) {
+            fs::path texPath = fs::path(baseDir) / loaded.materialTexturePaths[i];
+            cudaTextureObject_t texObj = createCudaTexture(texPath.string(), m_cudaTextureArrays, m_cudaTextureObjects);
+            loaded.materials[i].texObj = texObj;
+        }
+    }
+
     m_scene.setTriangles(loaded.triangles.data(),
                                              (uint32_t)loaded.triangles.size());
     m_scene.setMaterials(loaded.materials.data(),
                                              (uint32_t)loaded.materials.size());
     
-    // Convert and upload mesh instances
-    std::vector<futaba::MeshInstanceGPU> meshGPU;
-    for (const auto& mesh : loaded.meshes) {
-        futaba::MeshInstanceGPU m;
-        m.triangleStart = mesh.triangleStart;
-        m.triangleCount = mesh.triangleCount;
-        m.emitterId = mesh.emitterId;
-        meshGPU.push_back(m);
-    }
-    m_scene.setMeshes(meshGPU.data(), (uint32_t)meshGPU.size());
-
     std::vector<futaba::EmitterGPU> emittersGPU;
     emittersGPU.reserve(loaded.emitters.size());
     for (const auto& emitter : loaded.emitters) {
@@ -520,6 +527,22 @@ bool FutabaScreen::loadScene(const std::string &xmlPath) {
         g.attachedMeshId = -1;
         emittersGPU.push_back(g);
     }
+
+    // Convert and upload mesh instances
+    std::vector<futaba::MeshInstanceGPU> meshGPU;
+    for (size_t i = 0; i < loaded.meshes.size(); ++i) {
+        const auto& mesh = loaded.meshes[i];
+        futaba::MeshInstanceGPU m;
+        m.triangleStart = mesh.triangleStart;
+        m.triangleCount = mesh.triangleCount;
+        m.emitterId = mesh.emitterId;
+        meshGPU.push_back(m);
+
+        if (mesh.emitterId >= 0 && mesh.emitterId < (int)emittersGPU.size()) {
+            emittersGPU[mesh.emitterId].attachedMeshId = (int)i;
+        }
+    }
+    m_scene.setMeshes(meshGPU.data(), (uint32_t)meshGPU.size());
     m_scene.setEmitters(emittersGPU.data(), (uint32_t)emittersGPU.size());
 
     // Build emissive-triangle distribution (area * emission luminance)
@@ -1018,4 +1041,74 @@ void FutabaScreen::saveTrainingData(const std::string& basePath) {
 
 void FutabaScreen::freeTrainingBuffers() {
     m_trainManager.freeBuffers();
+}
+
+static cudaTextureObject_t createCudaTexture(const std::string& filename,
+                                             std::vector<cudaArray*>& allocatedArrays,
+                                             std::vector<cudaTextureObject_t>& allocatedTextures)
+{
+    int width = 0, height = 0, channels = 0;
+    unsigned char* data = stbi_load(filename.c_str(), &width, &height, &channels, 4); // load as RGBA
+    if (!data) {
+        std::cerr << "Failed to load texture: " << filename << std::endl;
+        return 0;
+    }
+
+    cudaChannelFormatDesc channelDesc = cudaCreateChannelDesc(8, 8, 8, 8, cudaChannelFormatKindUnsigned);
+    cudaArray* cuArray = nullptr;
+    cudaError_t err = cudaMallocArray(&cuArray, &channelDesc, width, height);
+    if (err != cudaSuccess) {
+        std::cerr << "CUDA malloc array failed: " << cudaGetErrorString(err) << std::endl;
+        stbi_image_free(data);
+        return 0;
+    }
+
+    err = cudaMemcpy2DToArray(cuArray, 0, 0, data, width * 4 * sizeof(unsigned char), width * 4 * sizeof(unsigned char), height, cudaMemcpyHostToDevice);
+    stbi_image_free(data);
+    if (err != cudaSuccess) {
+        std::cerr << "CUDA memcpy to array failed: " << cudaGetErrorString(err) << std::endl;
+        cudaFreeArray(cuArray);
+        return 0;
+    }
+
+    allocatedArrays.push_back(cuArray);
+
+    struct cudaResourceDesc resDesc;
+    memset(&resDesc, 0, sizeof(resDesc));
+    resDesc.resType = cudaResourceTypeArray;
+    resDesc.res.array.array = cuArray;
+
+    struct cudaTextureDesc texDesc;
+    memset(&texDesc, 0, sizeof(texDesc));
+    texDesc.addressMode[0] = cudaAddressModeWrap;
+    texDesc.addressMode[1] = cudaAddressModeWrap;
+    texDesc.filterMode = cudaFilterModeLinear;
+    texDesc.readMode = cudaReadModeNormalizedFloat;
+    texDesc.normalizedCoords = 1;
+
+    cudaTextureObject_t texObj = 0;
+    err = cudaCreateTextureObject(&texObj, &resDesc, &texDesc, NULL);
+    if (err != cudaSuccess) {
+        std::cerr << "CUDA create texture object failed: " << cudaGetErrorString(err) << std::endl;
+        return 0;
+    }
+
+    allocatedTextures.push_back(texObj);
+    return texObj;
+}
+
+void FutabaScreen::clearTextures() {
+    for (auto texObj : m_cudaTextureObjects) {
+        if (texObj != 0) {
+            cudaDestroyTextureObject(texObj);
+        }
+    }
+    m_cudaTextureObjects.clear();
+
+    for (auto cuArray : m_cudaTextureArrays) {
+        if (cuArray != nullptr) {
+            cudaFreeArray(cuArray);
+        }
+    }
+    m_cudaTextureArrays.clear();
 }

@@ -23,9 +23,36 @@ public:
     void setPoint(const std::string& name, const ::Point3f& value) { m_properties[name] = value; }
     void setVector(const std::string& name, const ::Vector3f& value) { m_properties[name] = VectorValue{ value }; }
 
-    bool getBoolean(const std::string& name) const { return getRequired<bool>(name, "boolean"); }
-    int getInteger(const std::string& name) const { return getRequired<int>(name, "integer"); }
-    float getFloat(const std::string& name) const { return getRequired<float>(name, "float"); }
+    bool getBoolean(const std::string& name) const {
+        auto it = m_properties.find(name);
+        if (it == m_properties.end()) {
+            throw std::runtime_error("Property '" + name + "' is missing");
+        }
+        if (auto b = std::get_if<bool>(&it->second)) return *b;
+        if (auto i = std::get_if<int>(&it->second)) return *i != 0;
+        if (auto f = std::get_if<float>(&it->second)) return *f != 0.f;
+        throw std::runtime_error("Property '" + name + "' has wrong type (expected boolean-coercible)");
+    }
+    int getInteger(const std::string& name) const {
+        auto it = m_properties.find(name);
+        if (it == m_properties.end()) {
+            throw std::runtime_error("Property '" + name + "' is missing");
+        }
+        if (auto i = std::get_if<int>(&it->second)) return *i;
+        if (auto f = std::get_if<float>(&it->second)) return (int)*f;
+        if (auto b = std::get_if<bool>(&it->second)) return *b ? 1 : 0;
+        throw std::runtime_error("Property '" + name + "' has wrong type (expected integer-coercible)");
+    }
+    float getFloat(const std::string& name) const {
+        auto it = m_properties.find(name);
+        if (it == m_properties.end()) {
+            throw std::runtime_error("Property '" + name + "' is missing");
+        }
+        if (auto f = std::get_if<float>(&it->second)) return *f;
+        if (auto i = std::get_if<int>(&it->second)) return (float)*i;
+        if (auto b = std::get_if<bool>(&it->second)) return *b ? 1.f : 0.f;
+        throw std::runtime_error("Property '" + name + "' has wrong type (expected float-coercible)");
+    }
     std::string getString(const std::string& name) const { return getRequired<std::string>(name, "string"); }
     ::Color3f getColor(const std::string& name) const {
         auto it = m_properties.find(name);
@@ -51,9 +78,30 @@ public:
         return value->value;
     }
 
-    bool getBoolean(const std::string& name, bool defaultValue) const { return getWithDefault<bool>(name, defaultValue, "boolean"); }
-    int getInteger(const std::string& name, int defaultValue) const { return getWithDefault<int>(name, defaultValue, "integer"); }
-    float getFloat(const std::string& name, float defaultValue) const { return getWithDefault<float>(name, defaultValue, "float"); }
+    bool getBoolean(const std::string& name, bool defaultValue) const {
+        auto it = m_properties.find(name);
+        if (it == m_properties.end()) return defaultValue;
+        if (auto b = std::get_if<bool>(&it->second)) return *b;
+        if (auto i = std::get_if<int>(&it->second)) return *i != 0;
+        if (auto f = std::get_if<float>(&it->second)) return *f != 0.f;
+        return defaultValue;
+    }
+    int getInteger(const std::string& name, int defaultValue) const {
+        auto it = m_properties.find(name);
+        if (it == m_properties.end()) return defaultValue;
+        if (auto i = std::get_if<int>(&it->second)) return *i;
+        if (auto f = std::get_if<float>(&it->second)) return (int)*f;
+        if (auto b = std::get_if<bool>(&it->second)) return *b ? 1 : 0;
+        return defaultValue;
+    }
+    float getFloat(const std::string& name, float defaultValue) const {
+        auto it = m_properties.find(name);
+        if (it == m_properties.end()) return defaultValue;
+        if (auto f = std::get_if<float>(&it->second)) return *f;
+        if (auto i = std::get_if<int>(&it->second)) return (float)*i;
+        if (auto b = std::get_if<bool>(&it->second)) return *b ? 1.f : 0.f;
+        return defaultValue;
+    }
     std::string getString(const std::string& name, const std::string& defaultValue) const { return getWithDefault<std::string>(name, defaultValue, "string"); }
     ::Color3f getColor(const std::string& name, const ::Color3f& defaultValue) const {
         auto it = m_properties.find(name);

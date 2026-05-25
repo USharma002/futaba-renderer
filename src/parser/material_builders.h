@@ -137,6 +137,13 @@ inline Material makeMaterialFromPropertyLists(
     if (type == "roughplastic") return make_roughplastic_material(bsdfProps, emitterProps);
     if (type == "roughdielectric") return make_roughdielectric_material(bsdfProps, emitterProps);
     if (type == "roughconductor") return make_roughconductor_material(bsdfProps, emitterProps);
+    if (type == "conductor") {
+        PropertyList props = bsdfProps;
+        if (!props.hasProperty("alpha") && !props.hasProperty("roughness")) {
+            props.setFloat("alpha", 0.001f);
+        }
+        return make_roughconductor_material(props, emitterProps);
+    }
 
     // Unknown type: fall back to diffuse and record a warning.
     warnings.push_back(

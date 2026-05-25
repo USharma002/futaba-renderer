@@ -52,6 +52,7 @@ struct MeshInstance {
 struct LoadedScene {
     std::vector<Triangle>       triangles;
     std::vector<Material>       materials;
+    std::vector<std::string>    materialTexturePaths; // Same size as LoadedScene::materials
     std::vector<EmitterInstance> emitters;
     std::vector<MeshInstance>   meshes;
 

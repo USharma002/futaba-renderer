@@ -111,4 +111,8 @@ private:
 
   void saveTrainingData(const std::string& basePath);
   void freeTrainingBuffers();
+
+  std::vector<cudaArray*>          m_cudaTextureArrays;
+  std::vector<cudaTextureObject_t> m_cudaTextureObjects;
+  void clearTextures();
 };

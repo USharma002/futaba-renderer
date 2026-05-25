@@ -44,10 +44,10 @@ struct EnvironmentMapEmitter {
             toWorld.m[0][2] * dirWorld.x + toWorld.m[1][2] * dirWorld.y + toWorld.m[2][2] * dirWorld.z
         ));
 
-        const float phi = atan2f(d.y, d.x);
+        const float phi = atan2f(d.x, -d.z);
         float u = phi / (2.f * M_PI);
         if (u < 0.f) u += 1.f;
-        const float v = acosf(clamp(d.z, -1.f, 1.f)) / M_PI;
+        const float v = acosf(clamp(d.y, -1.f, 1.f)) / M_PI;
 
         const float x = u * (float)width  - 0.5f;
         const float y = v * (float)height - 0.5f;
