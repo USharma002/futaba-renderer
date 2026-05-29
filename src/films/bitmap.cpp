@@ -16,12 +16,16 @@
 
 namespace futaba {
 
-Bitmap* HDRFilm::toBitmap(const float* d_alternative_pixels) const {
+Bitmap* HDRFilm::toBitmap(const float4* d_alternative_pixels) const {
     Bitmap* bmp = new Bitmap(width, height);
     
     if (d_alternative_pixels != nullptr) {
-        // Copy alternative pixels from GPU to CPU (already averaged by denoiser input prep)
-        cudaMemcpy(bmp->pixels.data(), d_alternative_pixels, width * height * sizeof(Color3f), cudaMemcpyDeviceToHost);
+        // Copy alternative pixels from GPU to CPU (getOutputBeauty is now float4)
+        std::vector<float4> host_pixels((size_t)width * height);
+        cudaMemcpy(host_pixels.data(), d_alternative_pixels, (size_t)width * height * sizeof(float4), cudaMemcpyDeviceToHost);
+        for (int i = 0; i < width * height; ++i) {
+            bmp->pixels[i] = Color3f(host_pixels[i].x, host_pixels[i].y, host_pixels[i].z);
+        }
     } else {
         // Copy pixels from GPU to CPU
         cudaMemcpy(bmp->pixels.data(), d_pixels, width * height * sizeof(Color3f), cudaMemcpyDeviceToHost);

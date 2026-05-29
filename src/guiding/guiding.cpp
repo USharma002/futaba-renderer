@@ -30,6 +30,14 @@ void GuidingManager::train(int sampleCount) {
     // Skeleton implementation
 }
 
+void GuidingManager::preprocess() {
+    // Empty preprocess hook (e.g. photon mapping init, tree rebuild setups)
+}
+
+void GuidingManager::postprocess() {
+    // Empty postprocess hook (e.g. tree rebuild, spatial structure updates)
+}
+
 void GuidingManager::destroy() {
     // Skeleton implementation
 }

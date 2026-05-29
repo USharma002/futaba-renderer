@@ -9,6 +9,7 @@
 #include "ray.cuh"
 #include "triangle.cuh"
 #include "surface_interaction.cuh"
+#include "material.cuh"
 
 #include <optix.h>
 
@@ -343,11 +344,15 @@ struct BVH {
 
     // Shadow ray: returns true if any geometry occludes [tMin, tMax].
     HD bool occluded(const Ray& ray, float tMin, float tMax,
-                     const Triangle* __restrict__ triangles = nullptr) const {
+                     int target_mesh_id = -1,
+                     const Triangle* __restrict__ triangles = nullptr,
+                     const Material* __restrict__ materials = nullptr,
+                     int materialCount = 0) const {
 #if defined(FUTABA_OPTIX_DEVICE_PROGRAMS) && FUTABA_USE_OPTIX
         if (traversable == 0)
             return false;
 
+        unsigned int target_mesh_id_u = (unsigned int)target_mesh_id;
         unsigned int hit = 0;
         optixTrace(traversable,
                    make_float3(ray.o.x, ray.o.y, ray.o.z),
@@ -360,12 +365,75 @@ struct BVH {
                    1,  // SBT offset (shadow ray type)
                    2,  // SBT stride (2 ray types)
                    1,  // miss SBT index (shadow miss)
+                   target_mesh_id_u,
                    hit);
         return hit != 0;
 #else
-        // Software fallback: reuse full intersect with early-out
-        SurfaceIntersection tmp;
-        return intersect(ray, tMin, tMax, triangles, tmp, false);
+        const BVHNode* __restrict__ bvhNodes = nodes;
+        const int* __restrict__ bvhTriIndices = triIndices;
+
+        if (bvhNodes == nullptr || bvhTriIndices == nullptr || nodeCount == 0 || triangles == nullptr) {
+            return false;
+        }
+
+        int stack[64];
+        int stackSize = 0;
+
+        float dummyDist;
+        if (!bvhNodes[0].bounds.intersectDist(ray, tMin, tMax, dummyDist)) {
+            return false;
+        }
+
+        stack[stackSize++] = 0;
+
+        while (stackSize > 0) {
+            int nodeIdx = stack[--stackSize];
+            const BVHNode& node = bvhNodes[nodeIdx];
+
+            if (node.isLeaf()) {
+                for (int i = 0; i < node.triCount; ++i) {
+                    int triIdx = bvhTriIndices[node.leftFirst + i];
+                    const Triangle& tri = triangles[triIdx];
+                    if (tri.mesh_id == target_mesh_id) {
+                        continue;
+                    }
+                    if (materials && tri.material_id >= 0 && tri.material_id < materialCount) {
+                        int mat_type = materials[tri.material_id].type;
+                        if (mat_type == BSDF_ID_NULL) {
+                            continue;
+                        }
+                    }
+                    SurfaceIntersection tmp;
+                    if (tri.intersect(ray, tMin, tMax, tmp, false, triIdx)) {
+                        return true;
+                    }
+                }
+            } else {
+                int leftIdx = node.leftFirst;
+                int rightIdx = leftIdx + 1;
+
+                float distLeft, distRight;
+                bool hitLeft = bvhNodes[leftIdx].bounds.intersectDist(ray, tMin, tMax, distLeft);
+                bool hitRight = bvhNodes[rightIdx].bounds.intersectDist(ray, tMin, tMax, distRight);
+
+                if (hitLeft && hitRight) {
+                    if (stackSize + 2 <= 64) {
+                        if (distLeft < distRight) {
+                            stack[stackSize++] = rightIdx;
+                            stack[stackSize++] = leftIdx;
+                        } else {
+                            stack[stackSize++] = leftIdx;
+                            stack[stackSize++] = rightIdx;
+                        }
+                    }
+                } else if (hitLeft) {
+                    if (stackSize + 1 <= 64) stack[stackSize++] = leftIdx;
+                } else if (hitRight) {
+                    if (stackSize + 1 <= 64) stack[stackSize++] = rightIdx;
+                }
+            }
+        }
+        return false;
 #endif
     }
 

@@ -6,6 +6,19 @@
 
 namespace futaba {
 
+struct TrainingBuffers {
+    float* active = nullptr;
+    Point3f* position = nullptr;
+    Color3f* normals = nullptr;
+    Color3f* wi = nullptr;
+    Color3f* wo = nullptr;
+    Color3f* radiance = nullptr;
+    float* material_id = nullptr;
+    int max_depth = 0;
+    int pixel_index = -1;
+    int img_size = 0;
+};
+
 class TrainingBufferManager {
 public:
     TrainingBufferManager();

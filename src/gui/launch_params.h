@@ -18,6 +18,11 @@ enum IntegratorMode {
     INTEGRATOR_VOLPATH = 7
 };
 
+enum LightSamplerType {
+    LIGHT_SAMPLER_UNIFORM = 0,
+    LIGHT_SAMPLER_POWER = 1
+};
+
 enum TonemappingMode {
     TONEMAPPING_NONE = 0,
     TONEMAPPING_ACES = 1,
@@ -37,6 +42,7 @@ struct LaunchParams {
     int rr_depth;
     int integrator_mode;
     int tonemapping_mode;
+    int light_sampler_type;
     Vector3f phong_light_dir;
     float phong_ambient;
     float phong_diffuse;
@@ -61,6 +67,7 @@ struct LaunchParams {
     uchar4* vis_pbo_ptr;
     int vis_depth;
     int vis_buffer_type;
+    bool vis_active;
 };
 
 } // namespace futaba

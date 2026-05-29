@@ -8,6 +8,7 @@
 #include "normals.cuh"
 #include "path.cuh"
 #include "volpath.cuh"
+#include "power_sampler.cuh"
 #include "tonemapping.cuh"
 #include "perspective.cuh"
 #include "scene.cuh"
@@ -22,47 +23,21 @@ using namespace futaba;
 
 #define params (*reinterpret_cast<const LaunchParams *>(params_buffer))
 
-extern "C" __global__ void __raygen__render() {
-  uint3 idx = optixGetLaunchIndex();
-
-  if (idx.x >= params.width || idx.y >= params.height)
-    return;
-
-  int index = idx.y * params.width + idx.x;
+static __device__ Ray3f setup_ray(uint3 idx, int& index, Sampler& sampler) {
+  index = idx.y * params.width + idx.x;
 
   unsigned int seed = (unsigned int)(index + 1) ^ (params.sampleCount << 16);
-  Sampler sampler(seed);
+  sampler = Sampler(seed);
 
   float jx = params.use_antialiasing ? sampler.next1D() : 0.5f;
   float jy = params.use_antialiasing ? sampler.next1D() : 0.5f;
   float u = (float)(idx.x + jx) / (float)params.width;
   float v = (float)(idx.y + jy) / (float)params.height;
 
-  Ray3f ray = params.camera.sampleRay(u, v, sampler);
+  return params.camera.sampleRay(u, v, sampler);
+}
 
-  Color3f radiance;
-  if (params.integrator_mode == INTEGRATOR_NORMALS) {
-    Normals normals;
-    radiance = normals.sample(ray, params.scene, sampler);
-  } else if (params.integrator_mode == INTEGRATOR_HEATMAP) {
-    Heatmap heatmap;
-    radiance = heatmap.sample(ray, params.scene, sampler);
-  } else if (params.integrator_mode == INTEGRATOR_ALBEDO) {
-    Albedo albedo;
-    radiance = albedo.sample(ray, params.scene, sampler);
-  } else if (params.integrator_mode == INTEGRATOR_DEPTH) {
-    Depth depth;
-    radiance = depth.sample(ray, params.scene, sampler);
-  } else if (params.integrator_mode == INTEGRATOR_PHONG) {
-    Phong phong(params.phong_light_dir, params.phong_ambient,
-                params.phong_diffuse, params.phong_specular,
-                params.phong_shininess);
-    radiance = phong.sample(ray, params.scene, sampler);
-  } else {
-    Primitives primitives;
-    radiance = primitives.sample(ray, params.scene, sampler);
-  }
-
+static __device__ void accumulate_and_write(int index, const Ray3f& ray, const Color3f& radiance) {
   Color3f acc = params.film_pixels[index];
   acc += radiance;
   params.film_pixels[index] = acc;
@@ -102,26 +77,68 @@ extern "C" __global__ void __raygen__render() {
   }
 }
 
+extern "C" __global__ void __raygen__render() {
+  uint3 idx = optixGetLaunchIndex();
+
+  if (idx.x >= params.width || idx.y >= params.height)
+    return;
+
+  int index;
+  Sampler sampler;
+  Ray3f ray = setup_ray(idx, index, sampler);
+  Color3f radiance;
+  switch (params.integrator_mode) {
+    case INTEGRATOR_NORMALS: {
+      Normals normals;
+      radiance = normals.sample(ray, params.scene, sampler);
+      break;
+    }
+    case INTEGRATOR_HEATMAP: {
+      Heatmap heatmap;
+      radiance = heatmap.sample(ray, params.scene, sampler);
+      break;
+    }
+    case INTEGRATOR_ALBEDO: {
+      Albedo albedo;
+      radiance = albedo.sample(ray, params.scene, sampler);
+      break;
+    }
+    case INTEGRATOR_DEPTH: {
+      Depth depth;
+      radiance = depth.sample(ray, params.scene, sampler);
+      break;
+    }
+    case INTEGRATOR_PHONG: {
+      Phong phong(params.phong_light_dir, params.phong_ambient,
+                  params.phong_diffuse, params.phong_specular,
+                  params.phong_shininess);
+      radiance = phong.sample(ray, params.scene, sampler);
+      break;
+    }
+    case INTEGRATOR_PRIMITIVES:
+    default: {
+      Primitives primitives;
+      radiance = primitives.sample(ray, params.scene, sampler);
+      break;
+    }
+  }
+
+  accumulate_and_write(index, ray, radiance);
+}
+
 extern "C" __global__ void __raygen__path() {
   uint3 idx = optixGetLaunchIndex();
 
   if (idx.x >= params.width || idx.y >= params.height)
     return;
 
-  int index = idx.y * params.width + idx.x;
-
-  unsigned int seed = (unsigned int)(index + 1) ^ (params.sampleCount << 16);
-  Sampler sampler(seed);
-
-  float jx = params.use_antialiasing ? sampler.next1D() : 0.5f;
-  float jy = params.use_antialiasing ? sampler.next1D() : 0.5f;
-  float u = (float)(idx.x + jx) / (float)params.width;
-  float v = (float)(idx.y + jy) / (float)params.height;
-
-  Ray3f ray = params.camera.sampleRay(u, v, sampler);
+  int index;
+  Sampler sampler;
+  Ray3f ray = setup_ray(idx, index, sampler);
 
   Color3f radiance;
-  Path integrator(params.max_depth, params.rr_depth);
+  EmitterSampler light_sampler(params.light_sampler_type);
+  Path integrator(params.max_depth, params.rr_depth, light_sampler);
 
   if (params.train_active) {
     TrainingBuffers tb;
@@ -140,60 +157,25 @@ extern "C" __global__ void __raygen__path() {
       radiance = integrator.sample<true, true>(
           ray, params.scene, sampler, tb,
           params.denoise_albedo_buffer, params.denoise_normal_buffer,
-          index, params.sampleCount, &params.camera);
+          index, params.sampleCount, &params.camera, params.path_guiding_mode);
     } else {
       radiance = integrator.sample<true, false>(
-          ray, params.scene, sampler, tb);
+          ray, params.scene, sampler, tb,
+          nullptr, nullptr, -1, 1, nullptr, params.path_guiding_mode);
     }
   } else {
     if (params.denoise_active && params.denoise_albedo_buffer && params.denoise_normal_buffer) {
       radiance = integrator.sample<false, true>(
           ray, params.scene, sampler, TrainingBuffers(),
           params.denoise_albedo_buffer, params.denoise_normal_buffer,
-          index, params.sampleCount, &params.camera);
+          index, params.sampleCount, &params.camera, params.path_guiding_mode);
     } else {
       radiance = integrator.sample<false, false>(
           ray, params.scene, sampler);
     }
   }
 
-  Color3f acc = params.film_pixels[index];
-  acc += radiance;
-  params.film_pixels[index] = acc;
-
-  if (params.denoise_active) {
-    SurfaceIntersection si;
-    Color3f alb(0.f);
-    Vector3f norm(0.f);
-    if (params.scene.intersect(ray, ray.mint, ray.maxt, si)) {
-      alb = si.albedo;
-      norm = Vector3f(dot(si.n, params.camera.right),
-                      dot(si.n, params.camera.trueUp),
-                      dot(si.n, params.camera.forward));
-    } else {
-      alb = params.scene.eval_environment(ray.d);
-    }
-
-    if (params.sampleCount == 1) {
-      params.denoise_albedo_buffer[index] = alb;
-      params.denoise_normal_buffer[index] = norm;
-    } else {
-      params.denoise_albedo_buffer[index] += alb;
-      params.denoise_normal_buffer[index] += norm;
-    }
-  } else {
-    Color3f linear_avg = acc / (float)params.sampleCount;
-    Color3f tonemapped = tonemap::apply(linear_avg, params.tonemapping_mode);
-    Color3f final_color = toSRGB(tonemapped);
-
-    params.pbo_ptr[index].x =
-        (unsigned char)clamp(final_color.x * 255.f, 0.f, 255.f);
-    params.pbo_ptr[index].y =
-        (unsigned char)clamp(final_color.y * 255.f, 0.f, 255.f);
-    params.pbo_ptr[index].z =
-        (unsigned char)clamp(final_color.z * 255.f, 0.f, 255.f);
-    params.pbo_ptr[index].w = 255;
-  }
+  accumulate_and_write(index, ray, radiance);
 }
 
 extern "C" __global__ void __raygen__volpath() {
@@ -202,58 +184,15 @@ extern "C" __global__ void __raygen__volpath() {
   if (idx.x >= params.width || idx.y >= params.height)
     return;
 
-  int index = idx.y * params.width + idx.x;
+  int index;
+  Sampler sampler;
+  Ray3f ray = setup_ray(idx, index, sampler);
 
-  unsigned int seed = (unsigned int)(index + 1) ^ (params.sampleCount << 16);
-  Sampler sampler(seed);
-
-  float jx = params.use_antialiasing ? sampler.next1D() : 0.5f;
-  float jy = params.use_antialiasing ? sampler.next1D() : 0.5f;
-  float u = (float)(idx.x + jx) / (float)params.width;
-  float v = (float)(idx.y + jy) / (float)params.height;
-
-  Ray3f ray = params.camera.sampleRay(u, v, sampler);
-
-  VolumetricPath integrator(params.max_depth, params.rr_depth, false);
+  EmitterSampler light_sampler(params.light_sampler_type);
+  VolumetricPath integrator(params.max_depth, params.rr_depth, false, light_sampler);
   Color3f radiance = integrator.sample(ray, params.scene, sampler);
 
-  Color3f acc = params.film_pixels[index];
-  acc += radiance;
-  params.film_pixels[index] = acc;
-
-  if (params.denoise_active) {
-    SurfaceIntersection si;
-    Color3f alb(0.f);
-    Vector3f norm(0.f);
-    if (params.scene.intersect(ray, ray.mint, ray.maxt, si)) {
-      alb = si.albedo;
-      norm = Vector3f(dot(si.n, params.camera.right),
-                      dot(si.n, params.camera.trueUp),
-                      dot(si.n, params.camera.forward));
-    } else {
-      alb = params.scene.eval_environment(ray.d);
-    }
-
-    if (params.sampleCount == 1) {
-      params.denoise_albedo_buffer[index] = alb;
-      params.denoise_normal_buffer[index] = norm;
-    } else {
-      params.denoise_albedo_buffer[index] += alb;
-      params.denoise_normal_buffer[index] += norm;
-    }
-  } else {
-    Color3f linear_avg = acc / (float)params.sampleCount;
-    Color3f tonemapped = tonemap::apply(linear_avg, params.tonemapping_mode);
-    Color3f final_color = toSRGB(tonemapped);
-
-    params.pbo_ptr[index].x =
-        (unsigned char)clamp(final_color.x * 255.f, 0.f, 255.f);
-    params.pbo_ptr[index].y =
-        (unsigned char)clamp(final_color.y * 255.f, 0.f, 255.f);
-    params.pbo_ptr[index].z =
-        (unsigned char)clamp(final_color.z * 255.f, 0.f, 255.f);
-    params.pbo_ptr[index].w = 255;
-  }
+  accumulate_and_write(index, ray, radiance);
 }
 
 extern "C" __global__ void __closesthit__ch() {
@@ -267,17 +206,15 @@ extern "C" __global__ void __closesthit__ch() {
   unsigned int primIdx = optixGetPrimitiveIndex();
   const Triangle &tri = params.scene.triangles[primIdx];
 
-  // Evaluate full triangle intersection properties
   Ray3f ray(Point3f(optixGetWorldRayOrigin().x, optixGetWorldRayOrigin().y,
                     optixGetWorldRayOrigin().z),
             Vector3f(optixGetWorldRayDirection().x,
                      optixGetWorldRayDirection().y,
                      optixGetWorldRayDirection().z));
 
-  // Since OptiX reported a hit, we know it intersects. We pass bounds that
-  // ensure Triangle::intersect completes successfully.
-  tri.intersect(ray, 0.0f, optixGetRayTmax() + 0.001f, *rec,
-                params.scene.use_vertex_normals, (int)primIdx);
+  float2 bary = optixGetTriangleBarycentrics();
+  tri.populate_intersection(ray, optixGetRayTmax(), bary.x, bary.y, *rec,
+                            params.scene.use_vertex_normals, (int)primIdx);
 }
 
 extern "C" __global__ void __miss__ms() {
@@ -286,10 +223,25 @@ extern "C" __global__ void __miss__ms() {
 }
 
 extern "C" __global__ void __anyhit__shadow() {
-  optixSetPayload_0(1);
+  unsigned int target_mesh_id = optixGetPayload_0();
+  unsigned int primIdx = optixGetPrimitiveIndex();
+  const Triangle &tri = params.scene.triangles[primIdx];
+
+  if (tri.mesh_id == (int)target_mesh_id) {
+    optixIgnoreIntersection();
+  }
+
+  if (tri.material_id >= 0 && tri.material_id < (int)params.scene.materialCount) {
+    int mat_type = params.scene.materials[tri.material_id].type;
+    if (mat_type == BSDF_ID_NULL) {
+      optixIgnoreIntersection();
+    }
+  }
+
+  optixSetPayload_1(1);
   optixTerminateRay();
 }
 
 extern "C" __global__ void __miss__shadow() {
-  optixSetPayload_0(0);
+  optixSetPayload_1(0);
 }

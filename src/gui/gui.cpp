@@ -5,10 +5,12 @@
 #include "distribution.cuh"
 #include "scene_loader.h"
 #include <filesystem>
+#include <algorithm>
 #include <functional>
 #include <iostream>
 #include <fstream>
 #include <stb_image.h>
+#include <thread>
 
 using namespace nanogui;
 using namespace futaba;
@@ -17,6 +19,16 @@ namespace fs = std::filesystem;
 static cudaTextureObject_t createCudaTexture(const std::string& filename,
                                              std::vector<cudaArray*>& allocatedArrays,
                                              std::vector<cudaTextureObject_t>& allocatedTextures);
+
+static const std::vector<std::string> g_allBufferNames = {
+    "Active",
+    "Position",
+    "Normals",
+    "Incoming Angle (wi)",
+    "Outgoing Angle (wo)",
+    "Incoming Radiance",
+    "Material ID"
+};
 
 static constexpr float kMinFov = 5.f;
 static constexpr float kMaxFov = 120.f;
@@ -104,9 +116,36 @@ FutabaScreen::FutabaScreen(int width, int height)
     // Initialize render size from framebuffer
     glfwGetFramebufferSize(glfwWindow(), &m_renderWidth, &m_renderHeight);
 
-    Window *window = new Window(this, "Settings");
-    window->setPosition(nanogui::Vector2i(15, 15));
-    window->setLayout(new GroupLayout(10, 5, 5, 5));
+    // Set window icon
+    GLFWwindow *win = glfwWindow();
+    GLFWimage images[1];
+    int img_w, img_h, img_channels;
+    
+    // Try absolute paths using FUTABA_SOURCE_ROOT first, falling back to relative paths
+    unsigned char* pixels = stbi_load(FUTABA_SOURCE_ROOT "/assets/futaba-window.png", &img_w, &img_h, &img_channels, 4);
+    if (!pixels) {
+        pixels = stbi_load(FUTABA_SOURCE_ROOT "/assets/window.png", &img_w, &img_h, &img_channels, 4);
+    }
+    if (!pixels) {
+        pixels = stbi_load("assets/futaba-window.png", &img_w, &img_h, &img_channels, 4);
+    }
+    if (!pixels) {
+        pixels = stbi_load("assets/window.png", &img_w, &img_h, &img_channels, 4);
+    }
+    
+    if (pixels) {
+        images[0].width = img_w;
+        images[0].height = img_h;
+        images[0].pixels = pixels;
+        glfwSetWindowIcon(win, 1, images);
+        stbi_image_free(pixels);
+    }
+
+    m_mainSettingsWindow = new Window(this, "Settings");
+    m_mainSettingsWindow->setPosition(nanogui::Vector2i(15, 15));
+    m_mainSettingsWindow->setLayout(new GroupLayout(10, 5, 5, 5));
+    m_mainSettingsWindow->setVisible(false);
+    Window *window = m_mainSettingsWindow;
 
     Widget *btnPanel = new Widget(window);
     btnPanel->setLayout(
@@ -196,7 +235,7 @@ FutabaScreen::FutabaScreen(int width, int height)
 
         // 3. Path Guiding dropdown (skeleton setup)
         new Label(settingsGrid, "Path Guiding", "sans-bold");
-        ComboBox *guidingCombo = new ComboBox(settingsGrid, {"None", "SD-Tree (PPG)", "VMM (Mixture)"});
+        ComboBox *guidingCombo = new ComboBox(settingsGrid, {"None", "SD-Tree (PPG)", "NPM (Neural)"});
         guidingCombo->setSelectedIndex((int)m_pathGuidingMode);
         guidingCombo->setFixedWidth(130);
 
@@ -209,28 +248,23 @@ FutabaScreen::FutabaScreen(int width, int height)
             m_film->clear();
         });
 
+        // 5. Light Sampler dropdown
+        new Label(settingsGrid, "Light Sampler", "sans-bold");
+        m_lightSamplerCombo = new ComboBox(settingsGrid, {"Uniform", "Power"});
+        m_lightSamplerCombo->setSelectedIndex((int)m_lightSamplerType);
+        m_lightSamplerCombo->setFixedWidth(130);
+        m_lightSamplerCombo->setCallback([this](int index) {
+            m_lightSamplerType = index;
+            m_film->clear();
+        });
+
         guidingCombo->setCallback([this, cbTraining, guidingCombo](int index) {
-            try {
-                if (index == 1) {
-                    guidingCombo->setSelectedIndex(0);
-                    m_pathGuidingMode = 0;
-                    throw std::runtime_error("SD-Tree (PPG) is not implemented yet.");
-                } else if (index == 2) {
-                    guidingCombo->setSelectedIndex(0);
-                    m_pathGuidingMode = 0;
-                    throw std::runtime_error("VMM (Mixture) is not implemented yet.");
-                } else {
-                    m_pathGuidingMode = index;
-                    if (index != 0 && !m_collectTraining) {
-                        m_collectTraining = true;
-                        cbTraining->setChecked(true);
-                    }
-                }
-            } catch (const std::exception& e) {
-                auto dlg = new MessageDialog(this, MessageDialog::Type::Warning,
-                                             "Error", e.what());
-                (void)dlg;
+            m_pathGuidingMode = index;
+            if (index != 0 && !m_collectTraining) {
+                m_collectTraining = true;
+                cbTraining->setChecked(true);
             }
+            updateVisualizerDropdown();
             m_film->clear();
         });
 
@@ -398,19 +432,15 @@ FutabaScreen::FutabaScreen(int width, int height)
     });
 
     new Label(m_visualizationWindow, "Select Buffer Channel", "sans-bold");
-    ComboBox* visCombo = new ComboBox(m_visualizationWindow, {
-        "Active",
-        "Position",
-        "Normals",
-        "Incoming Angle (wi)",
-        "Outgoing Angle (wo)",
-        "Incoming Radiance",
-        "Material ID"
+    m_visCombo = new ComboBox(m_visualizationWindow);
+    m_visCombo->setCallback([this](int index) {
+        std::string selected = m_visCombo->items()[index];
+        auto it = std::find(g_allBufferNames.begin(), g_allBufferNames.end(), selected);
+        if (it != g_allBufferNames.end()) {
+            m_visBufferType = (int)std::distance(g_allBufferNames.begin(), it);
+        }
     });
-    visCombo->setSelectedIndex(m_visBufferType);
-    visCombo->setCallback([this](int index) {
-        m_visBufferType = index;
-    });
+    updateVisualizerDropdown();
 
     Widget* visDepthPanel = new Widget(m_visualizationWindow);
     visDepthPanel->setLayout(new BoxLayout(Orientation::Horizontal, Alignment::Middle, 0, 10));
@@ -465,6 +495,33 @@ FutabaScreen::FutabaScreen(int width, int height)
     futaba::initOptix();
     m_denoiser.init(futaba::getOptixContext(), m_renderWidth, m_renderHeight);
     m_guiding.init(m_renderWidth, m_renderHeight);
+
+    // Create the centered loading window
+    m_loadingWindow = new Window(this, "OptiX Initialization");
+    m_loadingWindow->setLayout(new BoxLayout(Orientation::Vertical, Alignment::Middle, 20, 15));
+    m_loadingWindow->setFixedWidth(450);
+    
+    // Title
+    auto* loadingTitle = new Label(m_loadingWindow, "Futaba Path Tracer", "sans-bold");
+    loadingTitle->setFontSize(24);
+    
+    // Status text label
+    m_loadingStatusLabel = new Label(m_loadingWindow, "Initializing OptiX Pipeline...");
+    m_loadingStatusLabel->setFontSize(16);
+    
+    // Progress Bar
+    m_loadingProgressBar = new ProgressBar(m_loadingWindow);
+    m_loadingProgressBar->setFixedWidth(400);
+    m_loadingProgressBar->setValue(0.0f);
+
+    m_loadingWindow->setPosition(nanogui::Vector2i((m_renderWidth - 450) / 2, (m_renderHeight - 180) / 2));
+    performLayout();
+
+    // Start background thread for OptiX pipeline compilation
+    std::thread compileThread([]() {
+        futaba::launch_initial_pipeline_compile();
+    });
+    compileThread.detach();
 }
 
 FutabaScreen::~FutabaScreen() {
@@ -708,10 +765,47 @@ void FutabaScreen::renderLoop() {
     GLFWwindow *win = glfwWindow();
     double lastTime = glfwGetTime(), lastFrameTime = lastTime;
     int nbFrames = 0;
+    bool was_compile_completed = false;
 
     while (!glfwWindowShouldClose(win)) {
         try {
             glfwPollEvents();
+
+            if (!futaba::g_optixCompileCompleted.load()) {
+                // Track framebuffer size changes during load
+                int fw, fh;
+                glfwGetFramebufferSize(win, &fw, &fh);
+                if (fw != m_renderWidth || fh != m_renderHeight) {
+                    m_renderWidth = fw;
+                    m_renderHeight = fh;
+                    recreateRenderTargets(fw, fh);
+                    performLayout();
+                }
+
+                if (m_loadingWindow) {
+                    m_loadingWindow->setPosition(nanogui::Vector2i((m_renderWidth - 450) / 2, (m_renderHeight - 180) / 2));
+                    m_loadingProgressBar->setValue(futaba::g_optixCompileProgress.load());
+                    m_loadingStatusLabel->setCaption(futaba::g_optixCompileStatus.load());
+                }
+
+                glViewport(0, 0, m_renderWidth, m_renderHeight);
+                glClearColor(0.11f, 0.11f, 0.13f, 1.0f);
+                glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+                drawContents();
+                drawWidgets();
+                glfwSwapBuffers(win);
+                continue;
+            } else if (!was_compile_completed) {
+                was_compile_completed = true;
+                if (m_loadingWindow) {
+                    m_loadingWindow->setVisible(false);
+                }
+                if (m_mainSettingsWindow) {
+                    m_mainSettingsWindow->setVisible(true);
+                }
+                performLayout();
+            }
 
             double currentTime = glfwGetTime();
             float deltaTime = (float)(currentTime - lastFrameTime);
@@ -789,20 +883,44 @@ void FutabaScreen::renderLoop() {
                                                      m_cudaPboResourceVis);
             }
 
-            launch_render(d_pbo_ptr, m_film, m_renderWidth, m_renderHeight, m_camera,
-                          m_scene, m_maxDepth, m_rrDepth, m_integratorMode,
-                          m_tonemappingMode, m_useAntialiasing, m_phongLightDir,
-                          m_phongAmbient, m_phongDiffuse, m_phongSpecular,
-                          m_phongShininess, m_useDenoiser,
-                          &m_denoiser, m_pathGuidingMode,
-                          m_collectTraining ? m_trainManager.getActive() : nullptr,
-                          m_collectTraining ? m_trainManager.getPosition() : nullptr,
-                          m_collectTraining ? m_trainManager.getNormals() : nullptr,
-                          m_collectTraining ? m_trainManager.getWi() : nullptr,
-                          m_collectTraining ? m_trainManager.getWo() : nullptr,
-                          m_collectTraining ? m_trainManager.getRadiance() : nullptr,
-                          m_collectTraining ? m_trainManager.getMaterialId() : nullptr,
-                          d_vis_pbo_ptr, m_visDepth, m_visBufferType, m_showVisualizer);
+            preprocess();
+
+            LaunchParams params = {};
+            params.pbo_ptr = d_pbo_ptr;
+            params.width = m_renderWidth;
+            params.height = m_renderHeight;
+            params.camera = m_camera;
+            params.scene = m_scene;
+            params.max_depth = m_maxDepth;
+            params.rr_depth = m_rrDepth;
+            params.integrator_mode = m_integratorMode;
+            params.tonemapping_mode = m_tonemappingMode;
+            params.use_antialiasing = m_useAntialiasing;
+            params.phong_light_dir = m_phongLightDir;
+            params.phong_ambient = m_phongAmbient;
+            params.phong_diffuse = m_phongDiffuse;
+            params.phong_specular = m_phongSpecular;
+            params.phong_shininess = m_phongShininess;
+            params.denoise_active = m_useDenoiser;
+            params.path_guiding_mode = m_pathGuidingMode;
+            params.light_sampler_type = m_lightSamplerType;
+
+            params.train_active = m_collectTraining ? m_trainManager.getActive() : nullptr;
+            params.train_position = m_collectTraining ? m_trainManager.getPosition() : nullptr;
+            params.train_normals = m_collectTraining ? m_trainManager.getNormals() : nullptr;
+            params.train_wi = m_collectTraining ? m_trainManager.getWi() : nullptr;
+            params.train_wo = m_collectTraining ? m_trainManager.getWo() : nullptr;
+            params.train_radiance = m_collectTraining ? m_trainManager.getRadiance() : nullptr;
+            params.train_material_id = m_collectTraining ? m_trainManager.getMaterialId() : nullptr;
+
+            params.vis_pbo_ptr = d_vis_pbo_ptr;
+            params.vis_depth = m_visDepth;
+            params.vis_buffer_type = m_visBufferType;
+            params.vis_active = m_showVisualizer;
+
+            launch_render(m_film, &m_denoiser, params);
+
+            postprocess();
 
             cudaGraphicsUnmapResources(1, &m_cudaPboResource, 0);
             if (m_showVisualizer && m_cudaPboResourceVis) {
@@ -1156,4 +1274,47 @@ void FutabaScreen::clearTextures() {
         }
     }
     m_cudaTextureArrays.clear();
+}
+
+void FutabaScreen::updateVisualizerDropdown() {
+    if (!m_visCombo) return;
+    
+    std::vector<std::string> items;
+    if (m_pathGuidingMode == futaba::PATH_GUIDING_NONE) {
+        items = {"Active"};
+    } else if (m_pathGuidingMode == futaba::PATH_GUIDING_SD_TREE) {
+        items = {"Active", "Position", "Outgoing Angle (wo)", "Incoming Radiance"};
+    } else if (m_pathGuidingMode == futaba::PATH_GUIDING_NPM) {
+        items = {"Active", "Position", "Normals", "Incoming Angle (wi)", "Outgoing Angle (wo)", "Incoming Radiance", "Material ID"};
+    }
+    
+    std::string currentSelectedStr = (m_visBufferType >= 0 && m_visBufferType < (int)g_allBufferNames.size()) 
+                                     ? g_allBufferNames[m_visBufferType] : "Active";
+    
+    m_visCombo->setItems(items);
+    
+    int newSelectedIndex = 0;
+    for (size_t i = 0; i < items.size(); ++i) {
+        if (items[i] == currentSelectedStr) {
+            newSelectedIndex = (int)i;
+            break;
+        }
+    }
+    m_visCombo->setSelectedIndex(newSelectedIndex);
+    
+    std::string finalSelectedStr = items[newSelectedIndex];
+    auto it = std::find(g_allBufferNames.begin(), g_allBufferNames.end(), finalSelectedStr);
+    if (it != g_allBufferNames.end()) {
+        m_visBufferType = (int)std::distance(g_allBufferNames.begin(), it);
+    }
+
+    performLayout();
+}
+
+void FutabaScreen::preprocess() {
+    m_guiding.preprocess();
+}
+
+void FutabaScreen::postprocess() {
+    m_guiding.postprocess();
 }

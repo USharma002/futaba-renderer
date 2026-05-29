@@ -33,9 +33,9 @@ struct AreaEmitter {
         const Point3f p_e = tri.sampleSurface(Point2f(u.y, u.z));
 
         const Vector3f v    = p_e - ref.p;
-        const float    d2   = dot(v, v);
-        const float    dist = sqrtf(d2);
-        const Vector3f wi   = v * (1.f / dist);
+        const float    dist = v.length();
+        const float    d2   = dist * dist;
+        const Vector3f wi   = v / dist;
 
         // Precompute triangle normal and area together to save redundant cross products & length calculations
         const Vector3f e1 = tri.p1 - tri.p0;

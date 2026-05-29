@@ -49,15 +49,18 @@ private:
   nanogui::Label *m_triCountLabel = nullptr;
   nanogui::Window *m_phongWindow = nullptr;
   nanogui::Window *m_settingsWindow = nullptr;
+  nanogui::Window *m_mainSettingsWindow = nullptr;
   nanogui::Slider *m_fovSlider = nullptr;
   nanogui::Slider *m_focusSlider = nullptr;
   nanogui::Slider *m_apertureSlider = nullptr;
   nanogui::ComboBox *m_integratorCombo = nullptr;
+  nanogui::ComboBox *m_lightSamplerCombo = nullptr;
   int m_maxDepth = 12;
   int m_rrDepth = 5;
   int m_integratorMode = futaba::INTEGRATOR_PATH;
   int m_tonemappingMode = futaba::TONEMAPPING_NONE;
   int m_pathGuidingMode = futaba::PATH_GUIDING_NONE;
+  int m_lightSamplerType = futaba::LIGHT_SAMPLER_UNIFORM;
   bool m_useVertexNormals = true;
   bool m_useAntialiasing = true;
   bool m_useNEE = true;
@@ -104,6 +107,7 @@ private:
 
   // Visualization GUI widgets and state
   nanogui::Window *m_visualizationWindow = nullptr;
+  nanogui::ComboBox *m_visCombo = nullptr;
   nanogui::ImageView *m_visImageView = nullptr;
   nanogui::IntBox<int> *m_visDepthBox = nullptr;
   int m_visDepth = 0;
@@ -112,8 +116,16 @@ private:
 
   void saveTrainingData(const std::string& basePath);
   void freeTrainingBuffers();
+  void updateVisualizerDropdown();
+  void preprocess();
+  void postprocess();
 
   std::vector<cudaArray*>          m_cudaTextureArrays;
   std::vector<cudaTextureObject_t> m_cudaTextureObjects;
   void clearTextures();
+
+  // Full-screen loading overlay for background OptiX pipeline compilation
+  nanogui::Window*      m_loadingWindow = nullptr;
+  nanogui::ProgressBar* m_loadingProgressBar = nullptr;
+  nanogui::Label*       m_loadingStatusLabel = nullptr;
 };

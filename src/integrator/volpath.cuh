@@ -13,9 +13,10 @@ struct VolumetricPath {
     int  max_depth;
     int  rr_depth;
     bool hide_emitters;
+    EmitterSampler emitter_sampler;
 
-    HD VolumetricPath(int max_d = 8, int rr_d = 5, bool hide_e = false)
-        : max_depth(max_d), rr_depth(rr_d), hide_emitters(hide_e) {}
+    HD VolumetricPath(int max_d = 8, int rr_d = 5, bool hide_e = false, EmitterSampler sampler = EmitterSampler())
+        : max_depth(max_d), rr_depth(rr_d), hide_emitters(hide_e), emitter_sampler(sampler) {}
 
     HD static float mis_weight(float pdf_a, float pdf_b) {
         const float a2 = pdf_a * pdf_a;
@@ -37,22 +38,18 @@ struct VolumetricPath {
         Point3f prev_p          = ray.o;
 
         bool inside_medium = false;
-        UniformEmitterSampler emitter_sampler;
 
         for (int depth = 0; depth < max_depth; ++depth) {
             SurfaceIntersection si;
             bool hit = scene.intersect(current_ray, current_ray.mint, current_ray.maxt, si);
 
-            // Handle medium volume scattering
             if (scene.hasMedium && inside_medium) {
-                // Select a channel at random to sample distance t
                 float sigma_t_c = 0.f;
                 scene.medium.sampleChannel(sampler.next1D(), sigma_t_c);
 
                 float t = -logf(1.f - fminf(sampler.next1D(), 0.999999f)) / fmaxf(sigma_t_c, 1e-6f);
 
                 if (!hit || t < si.t) {
-                    // Volume scattering event
                     Point3f p_t = current_ray.o + t * current_ray.d;
 
                     Color3f transmittance = scene.medium.evalTransmittance(t);
@@ -63,11 +60,9 @@ struct VolumetricPath {
                     Color3f W = (transmittance * scene.medium.homogeneous.sigmaS) / pdf;
                     beta *= W;
 
-                    // Direct lighting (NEE)
                     if (scene.use_nee) {
                         EmitterSample es;
                         Point3f u3(sampler.next1D(), sampler.next1D(), sampler.next1D());
-                        // Pass a dummy SurfaceIntersection to UniformEmitterSampler::sample
                         SurfaceIntersection vol_si;
                         vol_si.p = p_t;
                         vol_si.wi = -current_ray.d;
@@ -77,13 +72,7 @@ struct VolumetricPath {
                             if (es.Le.x > 0.f || es.Le.y > 0.f || es.Le.z > 0.f) {
                                 Ray shadow(p_t, es.d);
                                 float t_max = es.dist - 1e-4f;
-                                SurfaceIntersection occ;
-                                bool visible = true;
-                                if (scene.intersect(shadow, 1e-6f, t_max, occ)) {
-                                    if (occ.shape_id != es.mesh_id && occ.mat_type != BSDF_ID_MIRROR && occ.mat_type != BSDF_ID_DIELECTRIC && occ.mat_type != BSDF_ID_NULL) {
-                                        visible = false;
-                                    }
-                                }
+                                bool visible = !scene.occluded(shadow, 1e-6f, t_max, es.mesh_id);
                                 if (visible) {
                                     Color3f trans_light = scene.medium.evalTransmittance(es.dist);
 
@@ -95,7 +84,6 @@ struct VolumetricPath {
                         }
                     }
 
-                    // Sample phase function to continue path
                     Vector3f wo;
                     float phase_pdf = 0.f;
                     scene.medium.getPhaseFunction().sample(current_ray.d, sampler.next2D(), wo, phase_pdf);
@@ -107,7 +95,6 @@ struct VolumetricPath {
 
                     continue;
                 } else {
-                    // Reach surface before medium interaction.
                     Color3f transmittance = scene.medium.evalTransmittance(si.t);
                     float prob_surf = expf(-sigma_t_c * si.t);
                     if (prob_surf > 0.f) {
@@ -120,7 +107,7 @@ struct VolumetricPath {
                 inside_medium = !inside_medium;
                 current_ray = si.spawn_ray(current_ray.d);
                 prev_bsdf_delta = true;
-                depth--; // Null boundary crossing doesn't count as a bounce
+                depth--;
                 continue;
             }
 
@@ -162,13 +149,7 @@ struct VolumetricPath {
                             if (f_bsdf.x > 0.f || f_bsdf.y > 0.f || f_bsdf.z > 0.f) {
                                 Ray shadow = si.spawn_ray(es.d);
                                 float t_max = es.dist - 1e-4f;
-                                SurfaceIntersection occ;
-                                bool visible = true;
-                                if (scene.intersect(shadow, 1e-6f, t_max, occ)) {
-                                    if (occ.shape_id != es.mesh_id && occ.mat_type != BSDF_ID_MIRROR && occ.mat_type != BSDF_ID_DIELECTRIC && occ.mat_type != BSDF_ID_NULL) {
-                                        visible = false;
-                                    }
-                                }
+                                bool visible = !scene.occluded(shadow, 1e-6f, t_max, es.mesh_id);
                                 if (visible) {
                                     Color3f trans_light(1.f);
                                     if (scene.hasMedium && inside_medium) {

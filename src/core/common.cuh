@@ -55,19 +55,10 @@ HD float getLuminance(const Color3f& c) {
 
 // Convert linear RGB to sRGB (for displaying on monitors)
 HD Color3f toSRGB(const Color3f& c) {
-    Color3f result;
-    for (int i = 0; i < 3; ++i) {
-        float value = (i == 0) ? c.x : ((i == 1) ? c.y : c.z);
-        if (value <= 0.0031308f) {
-            value = 12.92f * value;
-        } else {
-            value = 1.055f * powf(value, 1.0f / 2.4f) - 0.055f;
-        }
-        if (i == 0) result.x = value;
-        else if (i == 1) result.y = value;
-        else result.z = value;
-    }
-    return result;
+    auto srgb_channel = [](float v) {
+        return (v <= 0.0031308f) ? (12.92f * v) : (1.055f * powf(v, 1.f / 2.4f) - 0.055f);
+    };
+    return Color3f(srgb_channel(c.x), srgb_channel(c.y), srgb_channel(c.z));
 }
 
 // -----------------------------------------------------------------------------
@@ -96,7 +87,7 @@ HD Vector3f sphericalDirection(float theta, float phi) {
 
 
 HD float length(const Vector3f& v) {
-    return sqrtf(v.x * v.x + v.y * v.y + v.z * v.z);
+    return v.length();
 }
 
 // -----------------------------------------------------------------------------

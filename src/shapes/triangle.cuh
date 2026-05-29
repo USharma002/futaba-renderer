@@ -13,9 +13,9 @@ struct Triangle {
     int mesh_id = -1;         // Mesh ID (4 bytes)
     bool has_normals = false; // Whether the triangle has vertex normals (1 byte, but will be padded to 4 bytes)
     bool has_uvs = false;     // Whether the triangle has vertex UV coordinates
-    Point2f uv0 = Point2f(0.f);
-    Point2f uv1 = Point2f(0.f);
-    Point2f uv2 = Point2f(0.f);
+    Point2f uv0 = Point2f(0.f); // UV coordinates for vertex 0 (8 bytes)
+    Point2f uv1 = Point2f(0.f); // UV coordinates for vertex 1 (8 bytes)
+    Point2f uv2 = Point2f(0.f); // UV coordinates for vertex 2 (8 bytes)
 
     // Triangle vertices and normals in world space
     Point3f p0;
@@ -53,11 +53,16 @@ struct Triangle {
         // Compute t to find out where the intersection point is on the line
         float t = dot(edge2, qvec) * inv_det;
         if (t < t_min || t > t_max) return false;
+        populate_intersection(r, t, u, v, rec, use_vertex_normals, primitive_id);
+        return true;
+    }
 
+    HD void populate_intersection(const Ray& r, float t, float u, float v, SurfaceIntersection& rec, bool use_vertex_normals, int primitive_id = -1) const {
         rec.t = t;
         rec.p = r(rec.t);
         
-        // fill the record
+        Vector3f edge1 = p1 - p0;
+        Vector3f edge2 = p2 - p0;
         Vector3f face_n = normalize(cross(edge1, edge2));
         if (has_normals && use_vertex_normals) {
             float w = 1.0f - u - v;
@@ -83,8 +88,6 @@ struct Triangle {
         }
         Vector3f frame_n = rec.front_face ? rec.n : -rec.n;
         rec.set_frame_from_normal(frame_n);
-
-        return true;
     }
 
     // Compute the area of the triangle (used for importance sampling)

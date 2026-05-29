@@ -34,7 +34,7 @@ public:
     // Getters for guide buffers (allocated on GPU inside the denoiser manager)
     Color3f* getAlbedoBuffer() const { return m_dAlbedoBuffer; }
     Color3f* getNormalBuffer() const { return m_dNormalBuffer; }
-    float* getOutputBeauty() const { return m_dOutputBeauty; }
+    float4* getOutputBeauty() const { return m_dOutputBeauty; }
 
 private:
     OptixDeviceContext m_context;
@@ -55,10 +55,10 @@ private:
     Color3f* m_dNormalBuffer;
 
     // Temporary/intermediate buffers for denoiser input/output
-    float* m_dInputBeauty;   // float3 or float4 beauty buffer
-    float* m_dInputAlbedo;   // float3 or float4 guide albedo
-    float* m_dInputNormal;   // float3 or float4 guide normal
-    float* m_dOutputBeauty;  // float3 or float4 denoised beauty
+    float4* m_dInputBeauty;   // float3 or float4 beauty buffer
+    float4* m_dInputAlbedo;   // float3 or float4 guide albedo
+    float4* m_dInputNormal;   // float3 or float4 guide normal
+    float4* m_dOutputBeauty;  // float3 or float4 denoised beauty
 };
 
 } // namespace futaba

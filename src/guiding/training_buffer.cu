@@ -45,23 +45,17 @@ __global__ void visualize_training_buffer_kernel(
         else if (selected_buffer_type == 2) {
             // Normals
             Color3f n = train_normals ? train_normals[buf_idx] : Color3f(0.f);
-            float len = sqrtf(n.x * n.x + n.y * n.y + n.z * n.z);
-            if (len > 1e-6f) n = n / len;
-            final_color = Color3f(0.5f * (n.x + 1.f), 0.5f * (n.y + 1.f), 0.5f * (n.z + 1.f));
+            final_color = 0.5f * (safe_normalize(n) + Color3f(1.f));
         }
         else if (selected_buffer_type == 3) {
             // Incoming Angle wi
             Color3f wi = train_wi ? train_wi[buf_idx] : Color3f(0.f);
-            float len = sqrtf(wi.x * wi.x + wi.y * wi.y + wi.z * wi.z);
-            if (len > 1e-6f) wi = wi / len;
-            final_color = Color3f(0.5f * (wi.x + 1.f), 0.5f * (wi.y + 1.f), 0.5f * (wi.z + 1.f));
+            final_color = 0.5f * (safe_normalize(wi) + Color3f(1.f));
         }
         else if (selected_buffer_type == 4) {
             // Outgoing Angle wo
             Color3f wo = train_wo ? train_wo[buf_idx] : Color3f(0.f);
-            float len = sqrtf(wo.x * wo.x + wo.y * wo.y + wo.z * wo.z);
-            if (len > 1e-6f) wo = wo / len;
-            final_color = Color3f(0.5f * (wo.x + 1.f), 0.5f * (wo.y + 1.f), 0.5f * (wo.z + 1.f));
+            final_color = 0.5f * (safe_normalize(wo) + Color3f(1.f));
         }
         else if (selected_buffer_type == 5) {
             // Incoming Radiance

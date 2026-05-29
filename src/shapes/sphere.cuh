@@ -10,35 +10,28 @@ struct Sphere {
     Point3f center; // Center of the sphere (12 bytes)
     
     HD bool intersect(const Ray& r, float t_min, float t_max, SurfaceIntersection& rec) const {
-        // q = o - c
         Vector3f oc = r.o - center;
 
-        // || p(t) - c ||^2 = r^2
-        // solve this quadratic equation for t
-
-        float a = dot(r.d, r.d);
-        float b = 2.0f * dot(oc, r.d);
+        // Solve the simplified quadratic equation for normalized ray direction:
+        // t^2 + 2*half_b*t + c = 0
+        float half_b = dot(oc, r.d);
         float c = dot(oc, oc) - radius * radius;
-        float discriminant = b * b - 4.0f * a * c;
-
-        // h = 0 => 1 intersection (tangent)
-        // h < 0 => no intersection
-        // h > 0 => 2 intersections (entering and exiting)
+        float discriminant = half_b * half_b - c;
 
         if (discriminant < 0.0f) return false;
 
         float sqrtd = sqrtf(discriminant);
-        float root = (-b - sqrtd) / (2.0f * a);
+        float root = -half_b - sqrtd;
         
         if (root < t_min || root > t_max) {
-            root = (-b + sqrtd) / (2.0f * a);
+            root = -half_b + sqrtd;
             if (root < t_min || root > t_max) return false;
         }
 
         // We have a hit! Fill out the record.
         rec.t = root;
         rec.p = r(rec.t);
-        rec.n = normalize((rec.p - center) / radius);
+        rec.n = (rec.p - center) / radius; // already unit length (dist is radius)
         rec.wi = -r.d;
         rec.shape_id = -1;
         rec.material_id = material_id;

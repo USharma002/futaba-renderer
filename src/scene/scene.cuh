@@ -109,10 +109,18 @@ struct Scene {
         return hit;
     }
 
-    HD bool occluded(const Ray& ray, float t_min, float t_max) const {
+    HD bool occluded(const Ray& ray, float t_min, float t_max, int target_mesh_id = -1) const {
         if (bvh.nodeCount > 0)
-            return bvh.occluded(ray, t_min, t_max);
+            return bvh.occluded(ray, t_min, t_max, target_mesh_id, triangles, materials, materialCount);
         for (uint32_t i = 0; i < triangleCount; ++i) {
+            const Triangle& tri = triangles[i];
+            if (tri.mesh_id == target_mesh_id) continue;
+            if (tri.material_id >= 0 && tri.material_id < (int)materialCount) {
+                int mat_type = materials[tri.material_id].type;
+                if (mat_type == BSDF_ID_NULL) {
+                    continue;
+                }
+            }
             SurfaceIntersection tmp;
             if (triangles[i].intersect(ray, t_min, t_max, tmp, false, (int)i))
                 return true;

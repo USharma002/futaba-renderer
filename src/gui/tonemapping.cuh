@@ -18,54 +18,12 @@ HD Color3f aces(const Color3f& linear) {
     const float c = 2.43f;
     const float d = 0.59f;
     const float e = 0.14f;
-
-    // Element-wise operations: (x * (a*x + b)) / (x * (c*x + d) + e)
-    Color3f ax_b = Color3f(
-        linear.x * a,
-        linear.y * a,
-        linear.z * a
-    ) + Color3f(b);
-    
-    Color3f num = Color3f(
-        linear.x * ax_b.x,
-        linear.y * ax_b.y,
-        linear.z * ax_b.z
-    );
-
-    Color3f cx_d = Color3f(
-        linear.x * c,
-        linear.y * c,
-        linear.z * c
-    ) + Color3f(d);
-    
-    Color3f denom = Color3f(
-        linear.x * cx_d.x,
-        linear.y * cx_d.y,
-        linear.z * cx_d.z
-    ) + Color3f(e);
-
-    Color3f result = Color3f(
-        num.x / denom.x,
-        num.y / denom.y,
-        num.z / denom.z
-    );
-    return result;
+    return (linear * (a * linear + Color3f(b))) / (linear * (c * linear + Color3f(d)) + Color3f(e));
 }
 
 // Reinhard tone mapping (local variant)
 HD Color3f reinhard(const Color3f& linear) {
-    // result = x / (1 + x)
-    Color3f denom = Color3f(
-        1.f + linear.x,
-        1.f + linear.y,
-        1.f + linear.z
-    );
-    Color3f result = Color3f(
-        linear.x / denom.x,
-        linear.y / denom.y,
-        linear.z / denom.z
-    );
-    return result;
+    return linear / (Color3f(1.f) + linear);
 }
 
 // Filmic tone mapping (Uncharted 2 style)

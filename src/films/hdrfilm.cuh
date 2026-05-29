@@ -30,7 +30,7 @@ public:
     }
 
     // Copies GPU pixels to a CPU Bitmap, dividing by sampleCount if d_alternative_pixels is null
-    Bitmap* toBitmap(const float* d_alternative_pixels = nullptr) const;
+    Bitmap* toBitmap(const float4* d_alternative_pixels = nullptr) const;
 };
 
 } // namespace futaba

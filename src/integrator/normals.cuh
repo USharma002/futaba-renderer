@@ -18,10 +18,7 @@ struct Normals {
             return Color3f(0.f);
 
         // Remap normal components from [-1, 1] to [0, 1].
-        const Vector3f n = normalize(Vector3f(si.n.x, si.n.y, si.n.z));
-        return Color3f(0.5f * (n.x + 1.f),
-                       0.5f * (n.y + 1.f),
-                       0.5f * (n.z + 1.f));
+        return 0.5f * (normalize(si.n) + Vector3f(1.f));
     }
 };
 

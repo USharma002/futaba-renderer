@@ -43,10 +43,15 @@ struct Vector2 {
     HD Vector2 operator+(const Vector2& v) const { return Vector2(x + v.x, y + v.y); }
     HD Vector2 operator-(const Vector2& v) const { return Vector2(x - v.x, y - v.y); }
     HD Vector2 operator*(T s) const { return Vector2(x * s, y * s); }
+    HD Vector2 operator*(const Vector2& v) const { return Vector2(x * v.x, y * v.y); }
     HD Vector2 operator/(T s) const { T inv = 1 / s; return Vector2(x * inv, y * inv); }
+    HD Vector2 operator/(const Vector2& v) const { return Vector2(x / v.x, y / v.y); }
     
     HD Vector2& operator+=(const Vector2& v) { x += v.x; y += v.y; return *this; }
+    HD Vector2& operator-=(const Vector2& v) { x -= v.x; y -= v.y; return *this; }
     HD Vector2& operator*=(T s) { x *= s; y *= s; return *this; }
+    HD Vector2& operator/=(T s) { T inv = 1 / s; x *= inv; y *= inv; return *this; }
+    HD Vector2& operator/=(const Vector2& v) { x /= v.x; y /= v.y; return *this; }
     
     HD Vector2 operator-() const { return Vector2(-x, -y); }
     
@@ -70,6 +75,11 @@ struct Point2 {
     // Point - Vector = Point
     HD Point2 operator-(const Vector2<T>& v) const { return Point2(x - v.x, y - v.y); }
     
+    // For affine combinations
+    HD Point2 operator*(T s) const { return Point2(x * s, y * s); }
+    HD Point2& operator+=(const Vector2<T>& v) { x += v.x; y += v.y; return *this; }
+    HD Point2& operator-=(const Vector2<T>& v) { x -= v.x; y -= v.y; return *this; }
+    
     HD T& operator[](int i) { return (&x)[i]; }
     HD const T& operator[](int i) const { return (&x)[i]; }
 };
@@ -88,10 +98,14 @@ struct Vector3 {
     HD Vector3 operator*(const Vector3& v) const { return Vector3(x * v.x, y * v.y, z * v.z); }
     HD Vector3 operator*(T s) const { return Vector3(x * s, y * s, z * s); }
     HD Vector3 operator/(T s) const { T inv = 1 / s; return Vector3(x * inv, y * inv, z * inv); }
+    HD Vector3 operator/(const Vector3& v) const { return Vector3(x / v.x, y / v.y, z / v.z); }
     
     HD Vector3& operator+=(const Vector3& v) { x += v.x; y += v.y; z += v.z; return *this; }
+    HD Vector3& operator-=(const Vector3& v) { x -= v.x; y -= v.y; z -= v.z; return *this; }
     HD Vector3& operator*=(T s) { x *= s; y *= s; z *= s; return *this; }
     HD Vector3& operator*=(const Vector3& v) { x *= v.x; y *= v.y; z *= v.z; return *this; }
+    HD Vector3& operator/=(T s) { T inv = 1 / s; x *= inv; y *= inv; z *= inv; return *this; }
+    HD Vector3& operator/=(const Vector3& v) { x /= v.x; y /= v.y; z /= v.z; return *this; }
 
     HD Vector3 operator-() const { return Vector3(-x, -y, -z); }
 
@@ -118,6 +132,8 @@ struct Point3 {
     // For affine combinations (e.g. barycentric coordinates)
     HD Point3 operator*(T s) const { return Point3(x * s, y * s, z * s); }
     HD Point3 operator+(const Point3& p) const { return Point3(x + p.x, y + p.y, z + p.z); }
+    HD Point3& operator+=(const Vector3<T>& v) { x += v.x; y += v.y; z += v.z; return *this; }
+    HD Point3& operator-=(const Vector3<T>& v) { x -= v.x; y -= v.y; z -= v.z; return *this; }
     
     HD T& operator[](int i) { return (&x)[i]; }
     HD const T& operator[](int i) const { return (&x)[i]; }
@@ -165,9 +181,25 @@ HD Vector3f normalize(const Vector3f& v) {
     return Vector3f(v.x * invLen, v.y * invLen, v.z * invLen);
 }
 
-// Left scalar multiplication: float * Vector3f
+// Safe Normalize (avoids division by zero/NaN for zero vectors)
+HD Vector3f safe_normalize(const Vector3f& v) {
+    float len2 = v.x * v.x + v.y * v.y + v.z * v.z;
+    if (len2 <= 1e-12f) return Vector3f(0.f);
+    float invLen = FAST_RSQRT(len2);
+    return Vector3f(v.x * invLen, v.y * invLen, v.z * invLen);
+}
+
+// Left scalar multiplication
+template <typename T> HD Vector2<T> operator*(T s, const Vector2<T>& v) { return v * s; }
+template <typename T> HD Point2<T> operator*(T s, const Point2<T>& p) { return p * s; }
 template <typename T> HD Vector3<T> operator*(T s, const Vector3<T>& v) { return v * s; }
 template <typename T> HD Point3<T> operator*(T s, const Point3<T>& p) { return p * s; }
+
+// Element-wise exponentiation
+template <typename T>
+HD Vector3<T> exp(const Vector3<T>& v) {
+    return Vector3<T>(expf(v.x), expf(v.y), expf(v.z));
+}
 
 // Utility functions
 HD float clamp(float val, float minVal, float maxVal) {

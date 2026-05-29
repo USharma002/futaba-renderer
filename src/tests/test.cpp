@@ -59,7 +59,7 @@ int main() {
 
     print_type<Distribution1D>("Distribution1D");
     print_type<Distribution2D>("Distribution2D");
-    print_type<Path<UniformEmitterSampler>>("Path<UniformEmitterSampler>");
+    print_type<Path>("Path");
     print_type<VolumetricPath>("VolumetricPath");
     print_type<Phong>("Phong");
     print_type<LaunchParams>("LaunchParams");

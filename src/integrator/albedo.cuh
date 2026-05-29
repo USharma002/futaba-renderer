@@ -19,12 +19,8 @@ struct Albedo {
     if (dot(ray.d, n) > 0.0f)
       n = -n;
 
-    // TODO, not yet sure if I want to add point light sources in the scene
-
-    Color3f L = si.albedo; // Color3f(0.5f * (n.x + 1.0f), 0.5f * (n.y + 1.0f),
-                   // 0.5f * (n.z + 1.0f));
-    return L; // Color3f(0.5f * (n.x + 1.0f), 0.5f * (n.y + 1.0f),
-                   // 0.5f * (n.z + 1.0f));
+    Color3f L = si.albedo;
+    return L;
   }
 };
 

@@ -7,6 +7,13 @@
 #include <optix.h>
 #include <optix_stubs.h>
 #include <vector>
+#include <atomic>
+
+namespace futaba {
+    std::atomic<float> g_optixCompileProgress(0.0f);
+    std::atomic<const char*> g_optixCompileStatus("Starting OptiX compilation...");
+    std::atomic<bool> g_optixCompileCompleted(false);
+}
 
 using namespace futaba;
 
@@ -177,10 +184,15 @@ public:
   void init() {
     if (pipeline)
       return;
+    
+    futaba::g_optixCompileProgress = 0.05f;
+    futaba::g_optixCompileStatus = "Initializing OptiX context...";
     futaba::initOptix();
     OptixDeviceContext context = futaba::getOptixContext();
 
     // 1. Pipeline Compile Options
+    futaba::g_optixCompileProgress = 0.10f;
+    futaba::g_optixCompileStatus = "Configuring pipeline options...";
     OptixPipelineCompileOptions pipelineCompileOptions = {};
     pipelineCompileOptions.usesMotionBlur = false;
     pipelineCompileOptions.traversableGraphFlags =
@@ -196,6 +208,8 @@ public:
     moduleCompileOptions.debugLevel = OPTIX_COMPILE_DEBUG_LEVEL_NONE;
 
     // 2. Load PTX
+    futaba::g_optixCompileProgress = 0.15f;
+    futaba::g_optixCompileStatus = "Loading PTX code...";
     FILE *fp = fopen(PTX_FILE_PATH, "rb");
     if (!fp) {
       std::cerr << "Failed to open PTX file: " << PTX_FILE_PATH << std::endl;
@@ -211,11 +225,16 @@ public:
     char log[2048];
     size_t sizeof_log = sizeof(log);
 
+    futaba::g_optixCompileProgress = 0.20f;
+    futaba::g_optixCompileStatus = "Compiling OptiX device module...";
     optixModuleCreate(context, &moduleCompileOptions, &pipelineCompileOptions,
                       ptxCode.data(), ptxSize, log, &sizeof_log, &module);
 
     // 3. Program Groups
     OptixProgramGroupOptions pgOptions = {};
+
+    futaba::g_optixCompileProgress = 0.35f;
+    futaba::g_optixCompileStatus = "Creating shader programs (1/7)...";
     OptixProgramGroup raygenProgGroupRender;
     OptixProgramGroupDesc raygenDescRender = {};
     raygenDescRender.kind = OPTIX_PROGRAM_GROUP_KIND_RAYGEN;
@@ -225,6 +244,8 @@ public:
     optixProgramGroupCreate(context, &raygenDescRender, 1, &pgOptions, log,
                             &sizeof_log, &raygenProgGroupRender);
 
+    futaba::g_optixCompileProgress = 0.40f;
+    futaba::g_optixCompileStatus = "Creating shader programs (2/7)...";
     OptixProgramGroup raygenProgGroupPath;
     OptixProgramGroupDesc raygenDescPath = {};
     raygenDescPath.kind = OPTIX_PROGRAM_GROUP_KIND_RAYGEN;
@@ -234,6 +255,8 @@ public:
     optixProgramGroupCreate(context, &raygenDescPath, 1, &pgOptions, log,
                             &sizeof_log, &raygenProgGroupPath);
 
+    futaba::g_optixCompileProgress = 0.45f;
+    futaba::g_optixCompileStatus = "Creating shader programs (3/7)...";
     OptixProgramGroup raygenProgGroupVolPath;
     OptixProgramGroupDesc raygenDescVolPath = {};
     raygenDescVolPath.kind = OPTIX_PROGRAM_GROUP_KIND_RAYGEN;
@@ -243,6 +266,8 @@ public:
     optixProgramGroupCreate(context, &raygenDescVolPath, 1, &pgOptions, log,
                             &sizeof_log, &raygenProgGroupVolPath);
 
+    futaba::g_optixCompileProgress = 0.50f;
+    futaba::g_optixCompileStatus = "Creating shader programs (4/7)...";
     OptixProgramGroup missProgGroup;
     OptixProgramGroupDesc missDesc = {};
     missDesc.kind = OPTIX_PROGRAM_GROUP_KIND_MISS;
@@ -252,6 +277,8 @@ public:
     optixProgramGroupCreate(context, &missDesc, 1, &pgOptions, log, &sizeof_log,
                             &missProgGroup);
 
+    futaba::g_optixCompileProgress = 0.55f;
+    futaba::g_optixCompileStatus = "Creating shader programs (5/7)...";
     OptixProgramGroup hitProgGroup;
     OptixProgramGroupDesc hitDesc = {};
     hitDesc.kind = OPTIX_PROGRAM_GROUP_KIND_HITGROUP;
@@ -262,6 +289,8 @@ public:
                             &hitProgGroup);
 
     // Shadow miss
+    futaba::g_optixCompileProgress = 0.60f;
+    futaba::g_optixCompileStatus = "Creating shader programs (6/7)...";
     OptixProgramGroup shadowMissProgGroup;
     OptixProgramGroupDesc shadowMissDesc = {};
     shadowMissDesc.kind = OPTIX_PROGRAM_GROUP_KIND_MISS;
@@ -272,6 +301,8 @@ public:
                             &sizeof_log, &shadowMissProgGroup);
 
     // Shadow hit (anyhit only, no closest-hit)
+    futaba::g_optixCompileProgress = 0.65f;
+    futaba::g_optixCompileStatus = "Creating shader programs (7/7)...";
     OptixProgramGroup shadowHitProgGroup;
     OptixProgramGroupDesc shadowHitDesc = {};
     shadowHitDesc.kind = OPTIX_PROGRAM_GROUP_KIND_HITGROUP;
@@ -282,6 +313,8 @@ public:
                             &sizeof_log, &shadowHitProgGroup);
 
     // 4. Create Pipeline
+    futaba::g_optixCompileProgress = 0.80f;
+    futaba::g_optixCompileStatus = "Linking pipeline...";
     OptixProgramGroup programGroups[] = {raygenProgGroupRender,
                                          raygenProgGroupPath,
                                          raygenProgGroupVolPath,
@@ -297,6 +330,8 @@ public:
                         programGroups, 7, log, &sizeof_log, &pipeline);
 
     // 5. Build SBT
+    futaba::g_optixCompileProgress = 0.90f;
+    futaba::g_optixCompileStatus = "Building Shader Binding Table (SBT)...";
     std::vector<EmptyRecord> raygenRecords(3);
     optixSbtRecordPackHeader(raygenProgGroupRender, &raygenRecords[0]);
     optixSbtRecordPackHeader(raygenProgGroupPath, &raygenRecords[1]);
@@ -331,60 +366,32 @@ public:
     sbt.hitgroupRecordCount = 2;
 
     cudaMalloc(reinterpret_cast<void **>(&d_params), sizeof(LaunchParams));
+
+    futaba::g_optixCompileProgress = 1.00f;
+    futaba::g_optixCompileStatus = "Completed";
+    futaba::g_optixCompileCompleted = true;
   }
 };
 
 static OptixPipelineManager g_pipeline;
 
-void launch_render(uchar4 *d_buffer, HDRFilm *film, int width, int height,
-                   const PerspectiveCamera &camera, const Scene &scene,
-                   int max_depth, int rr_depth, int integrator_mode,
-                   int tonemapping_mode, bool use_antialiasing,
-                   const ::Vector3f &phong_light_dir,
-                   float phong_ambient, float phong_diffuse,
-                   float phong_specular, float phong_shininess,
-                   bool use_denoiser,
-                   futaba::DenoiserManager* denoiser,
-                   int path_guiding_mode,
-                   // Training buffers
-                   float* train_active,
-                   Point3f* train_position,
-                   Color3f* train_normals,
-                   Color3f* train_wi,
-                   Color3f* train_wo,
-                   Color3f* train_radiance,
-                   float* train_material_id,
-                   // Visualization parameters
-                   uchar4* d_vis_buffer,
-                   int vis_depth,
-                   int vis_buffer_type,
-                   bool vis_active) {
+namespace futaba {
+    void launch_initial_pipeline_compile() {
+        g_pipeline.init();
+    }
+}
+
+void launch_render(HDRFilm *film,
+                   DenoiserManager* denoiser,
+                   LaunchParams params) {
   g_pipeline.init();
 
   film->sampleCount++;
 
-  LaunchParams params = {};
-  params.pbo_ptr = d_buffer;
   params.film_pixels = film->d_pixels;
-  params.width = width;
-  params.height = height;
   params.sampleCount = film->sampleCount;
-  params.camera = camera;
-  params.scene = scene;
-  params.max_depth = max_depth;
-  params.rr_depth = rr_depth;
-  params.integrator_mode = integrator_mode;
-  params.tonemapping_mode = tonemapping_mode;
-  params.use_antialiasing = use_antialiasing;
-  params.phong_light_dir = phong_light_dir;
-  params.phong_ambient = phong_ambient;
-  params.phong_diffuse = phong_diffuse;
-  params.phong_specular = phong_specular;
-  params.phong_shininess = phong_shininess;
-  params.denoise_active = use_denoiser;
-  params.path_guiding_mode = path_guiding_mode;
   
-  if (use_denoiser && denoiser) {
+  if (params.denoise_active && denoiser) {
     params.denoise_albedo_buffer = denoiser->getAlbedoBuffer();
     params.denoise_normal_buffer = denoiser->getNormalBuffer();
   } else {
@@ -392,65 +399,51 @@ void launch_render(uchar4 *d_buffer, HDRFilm *film, int width, int height,
     params.denoise_normal_buffer = nullptr;
   }
 
-  // Training parameters
-  params.train_active = train_active;
-  params.train_position = train_position;
-  params.train_normals = train_normals;
-  params.train_wi = train_wi;
-  params.train_wo = train_wo;
-  params.train_radiance = train_radiance;
-  params.train_material_id = train_material_id;
-
-  // Visualization parameters
-  params.vis_pbo_ptr = d_vis_buffer;
-  params.vis_depth = vis_depth;
-  params.vis_buffer_type = vis_buffer_type;
-
   cudaMemcpy(reinterpret_cast<void *>(g_pipeline.d_params), &params,
              sizeof(LaunchParams), cudaMemcpyHostToDevice);
 
   int raygen_idx = 0; // default to render/preview
-  if (integrator_mode == INTEGRATOR_PATH) {
+  if (params.integrator_mode == INTEGRATOR_PATH) {
       raygen_idx = 1;
-  } else if (integrator_mode == INTEGRATOR_VOLPATH) {
+  } else if (params.integrator_mode == INTEGRATOR_VOLPATH) {
       raygen_idx = 2;
   }
   g_pipeline.sbt.raygenRecord = g_pipeline.d_raygenRecordsBase + raygen_idx * sizeof(EmptyRecord);
 
   optixLaunch(g_pipeline.pipeline,
               0, // stream
-              g_pipeline.d_params, sizeof(LaunchParams), &g_pipeline.sbt, width,
-              height, 1);
-
-  cudaDeviceSynchronize();
+              g_pipeline.d_params, sizeof(LaunchParams), &g_pipeline.sbt, params.width,
+              params.height, 1);
 
   // If denoising is active, execute the denoiser pipeline (which computes autoexposure, denoises, tonemaps, and copies to PBO)
-  if (use_denoiser && denoiser) {
+  if (params.denoise_active && denoiser) {
     denoiser->exec(
         film->d_pixels,
         denoiser->getAlbedoBuffer(),
         denoiser->getNormalBuffer(),
         film->sampleCount,
-        d_buffer,
-        tonemapping_mode
+        params.pbo_ptr,
+        params.tonemapping_mode
     );
   }
 
   // Run training visualization kernel if active
-  if (vis_active && d_vis_buffer) {
+  if (params.vis_active && params.vis_pbo_ptr) {
     run_visualization_kernel(
-        train_active,
-        train_position,
-        train_normals,
-        train_wi,
-        train_wo,
-        train_radiance,
-        train_material_id,
-        width, height,
-        max_depth,
-        vis_depth,
-        vis_buffer_type,
-        d_vis_buffer
+        params.train_active,
+        params.train_position,
+        params.train_normals,
+        params.train_wi,
+        params.train_wo,
+        params.train_radiance,
+        params.train_material_id,
+        params.width, params.height,
+        params.max_depth,
+        params.vis_depth,
+        params.vis_buffer_type,
+        params.vis_pbo_ptr
     );
   }
+
+  cudaDeviceSynchronize();
 }

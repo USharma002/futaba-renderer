@@ -4,6 +4,7 @@
 #include "common.cuh"
 #include "sampler.cuh"
 #include "ray.cuh"
+#include "warp.cuh"
 #include <cmath>
 
 namespace futaba {
@@ -78,12 +79,10 @@ public:
             return Ray3f(position, pinholeDir);
         }
 
-        // Sample a point on the lens (disk) and compute the ray direction towards the focus point.
-        Point2f disk = sampler.next2D();
-        float r = sqrtf(disk.x);
-        float theta = 2.0f * static_cast<float>(M_PI) * disk.y;
-        float lensX = r * cosf(theta) * apertureRadius;
-        float lensY = r * sinf(theta) * apertureRadius;
+        // Sample a point on the lens using concentric mapping
+        Point2f lensPoint = Warp::squareToConcentricDisk(sampler.next2D()) * apertureRadius;
+        float lensX = lensPoint.x;
+        float lensY = lensPoint.y;
 
         float focusT = focusDistance / dot(pinholeDir, forward);
         Point3f focusPoint = position + pinholeDir * focusT;

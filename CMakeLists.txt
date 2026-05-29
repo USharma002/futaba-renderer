@@ -107,6 +107,7 @@ add_custom_command(
             "${CMAKE_CURRENT_SOURCE_DIR}/src/emitters/emitter.cuh"
             "${CMAKE_CURRENT_SOURCE_DIR}/src/emitters/emitter_sample.cuh"
             "${CMAKE_CURRENT_SOURCE_DIR}/src/emitters/emitter_sampler.cuh"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/emitters/power_sampler.cuh"
             "${CMAKE_CURRENT_SOURCE_DIR}/src/emitters/area.cuh"
             "${CMAKE_CURRENT_SOURCE_DIR}/src/emitters/envmap.cuh"
             "${CMAKE_CURRENT_SOURCE_DIR}/src/scene/mesh.cuh"

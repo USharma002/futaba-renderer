@@ -6,6 +6,7 @@
 #include "scene.cuh"
 #include "surface_interaction.cuh"
 #include "guiding_device.cuh"
+#include "training_buffer.h"
 #include <cmath>
 
 namespace futaba {
@@ -16,27 +17,13 @@ HD float mis_weight(float pdf_a, float pdf_b)
     return (pdf_a > 0.f) ? a2 / (a2 + pdf_b * pdf_b) : 0.f;
 }
 
-struct TrainingBuffers {
-    float* active = nullptr;
-    Point3f* position = nullptr;
-    Color3f* normals = nullptr;
-    Color3f* wi = nullptr;
-    Color3f* wo = nullptr;
-    Color3f* radiance = nullptr;
-    float* material_id = nullptr;
-    int max_depth = 0;
-    int pixel_index = -1;
-    int img_size = 0;
-};
-
-template<typename EmitterSamplerT = UniformEmitterSampler>
 struct Path {
     int             max_depth;
     int             rr_depth;
-    EmitterSamplerT emitter_sampler;
+    EmitterSampler emitter_sampler;
 
-    HD explicit Path(int max_d = 12, int rr_d = 5)
-        : max_depth(max_d), rr_depth(rr_d) {}
+    HD explicit Path(int max_d = 12, int rr_d = 5, EmitterSampler sampler = EmitterSampler())
+        : max_depth(max_d), rr_depth(rr_d), emitter_sampler(sampler) {}
 
     // Compute MIS-weighted emission for a BSDF-sampled emitter hit.
     HD Color3f emission_weight(const Scene& scene,
@@ -99,25 +86,12 @@ struct Path {
     }
 
     HD bool visibility_test(const Scene& scene,
-                        const SurfaceIntersection& si,
-                        const EmitterSample& es) const
-{
-    const Ray   shadow = si.spawn_ray(es.d);
-    const float t_max  = es.dist - 1e-4f;
-
-    // If no self-occlusion possible, use the cheap any-hit query
-    if (es.mesh_id < 0)
-        return !scene.occluded(shadow, 1e-6f, t_max);
-
-    // Otherwise, one full intersect to check self/delta in a single traversal
-    SurfaceIntersection occ;
-    if (!scene.intersect(shadow, 1e-6f, t_max, occ))
-        return true;  // nothing blocking -> visible
-
-    const bool is_self  = (occ.shape_id == es.mesh_id);
-    const bool is_delta = (occ.mat_type == BSDF_ID_MIRROR ||
-                           occ.mat_type == BSDF_ID_DIELECTRIC);
-    return is_self || is_delta;
+                            const SurfaceIntersection& si,
+                            const EmitterSample& es) const
+    {
+        const Ray   shadow = si.spawn_ray(es.d);
+        const float t_max  = es.dist - 1e-4f;
+        return !scene.occluded(shadow, 1e-6f, t_max, es.mesh_id);
     }
 
     template<bool RecordDenoiseGuides>
@@ -147,13 +121,14 @@ struct Path {
                     denoise_albedo_buffer[pixel_index] += alb;
                     denoise_normal_buffer[pixel_index] += norm;
                 }
-            }
-        }
+    }
+    }
     }
 
+    // Record training features dynamically based on guiding mode.
     template<bool RecordTraining>
     HD void record_training_features(const SurfaceIntersection& si, bool hit, int depth, const Ray& current_ray,
-                                     const TrainingBuffers& tb, bool record_training) const
+                                     const TrainingBuffers& tb, bool record_training, int guiding_mode) const
     {
         if constexpr (RecordTraining) {
             if (record_training && depth < tb.max_depth) {
@@ -161,24 +136,31 @@ struct Path {
                 tb.active[buf_idx] = 1.0f;
 
                 if (hit) {
-                    if (tb.position) tb.position[buf_idx] = si.p;
-                    if (tb.normals) tb.normals[buf_idx] = si.n;
-                    if (tb.wi) tb.wi[buf_idx] = si.to_local(-current_ray.d);
-                    if (tb.material_id) tb.material_id[buf_idx] = (float)si.material_id;
+                    if (guiding_mode == PATH_GUIDING_SD_TREE || guiding_mode == PATH_GUIDING_NPM) {
+                        if (tb.position) tb.position[buf_idx] = si.p;
+                    }
+                    if (guiding_mode == PATH_GUIDING_NPM) {
+                        if (tb.normals) tb.normals[buf_idx] = si.n;
+                        if (tb.wi) tb.wi[buf_idx] = si.to_local(-current_ray.d);
+                        if (tb.material_id) tb.material_id[buf_idx] = (float)si.material_id;
+                    }
                 } else {
                     tb.active[buf_idx] = 0.0f; // Environmental hit is inactive geometry
-                    if (tb.material_id) tb.material_id[buf_idx] = -1.0f;
+                    if (guiding_mode == PATH_GUIDING_NPM) {
+                        if (tb.material_id) tb.material_id[buf_idx] = -1.0f;
+                    }
                 }
             }
         }
     }
 
+    // Propagate radiance backward along the path.
     template<bool RecordTraining>
-    HD void backward_propagate_radiance(int final_depth, const TrainingBuffers& tb, bool record_training,
+    HD void backward_propagate_radiance(int final_depth, const TrainingBuffers& tb, bool record_training, int guiding_mode,
                                         const Color3f* local_Le, const Color3f* local_nee, const Color3f* local_bsdf) const
     {
         if constexpr (RecordTraining) {
-            if (record_training && tb.radiance) {
+            if (record_training && tb.radiance && (guiding_mode == PATH_GUIDING_SD_TREE || guiding_mode == PATH_GUIDING_NPM)) {
                 Color3f incoming = Color3f(0.f);
                 constexpr int MAX_LOCAL_DEPTH = 16;
                 int start_depth = (final_depth < MAX_LOCAL_DEPTH) ? final_depth - 1 : MAX_LOCAL_DEPTH - 1;
@@ -205,7 +187,8 @@ struct Path {
                       Color3f* denoise_normal_buffer = nullptr,
                       int pixel_index = -1,
                       int sample_count = 1,
-                      const PerspectiveCamera* camera = nullptr) const
+                      const PerspectiveCamera* camera = nullptr,
+                      int guiding_mode = 0) const
     {
         Color3f L(0.f), beta(1.f);
         float   eta = 1.f;
@@ -259,7 +242,7 @@ struct Path {
                                                        pixel_index, sample_count, camera, scene);
 
             // Record training features for this bounce
-            record_training_features<RecordTraining>(si, hit, depth, current_ray, tb, record_training);
+            record_training_features<RecordTraining>(si, hit, depth, current_ray, tb, record_training, guiding_mode);
 
             if (!hit) {
                 // Environment emission
@@ -315,8 +298,10 @@ struct Path {
                     local_bsdf[depth] = bsdf_w * bs.pdf;
                 }
                 if (record_training && depth < tb.max_depth && tb.wo) {
-                    int buf_idx = depth * tb.img_size + tb.pixel_index;
-                    tb.wo[buf_idx] = bs.wo;
+                    if (guiding_mode == PATH_GUIDING_SD_TREE || guiding_mode == PATH_GUIDING_NPM) {
+                        int buf_idx = depth * tb.img_size + tb.pixel_index;
+                        tb.wo[buf_idx] = bs.wo;
+                    }
                 }
             }
 
@@ -341,12 +326,12 @@ struct Path {
         }
 
         // Backward propagation of radiance from local register arrays
-        backward_propagate_radiance<RecordTraining>(final_depth, tb, record_training, local_Le, local_nee, local_bsdf);
+        backward_propagate_radiance<RecordTraining>(final_depth, tb, record_training, guiding_mode, local_Le, local_nee, local_bsdf);
 
         return L;
     }
 };
 
-using PathIntegrator = Path<UniformEmitterSampler>;
+using PathIntegrator = Path;
 
 } // namespace futaba

@@ -5,7 +5,7 @@ namespace futaba {
 enum PathGuidingMode {
     PATH_GUIDING_NONE = 0,
     PATH_GUIDING_SD_TREE = 1, // Practical Path Guiding using SD-Trees
-    PATH_GUIDING_VMM = 2      // Path Guiding using Variational Mixture Models (e.g. vMM)
+    PATH_GUIDING_NPM = 2      // Path Guiding using Neural Parametric Mixtures (NPM)
 };
 
 #ifndef __CUDACC__
@@ -23,8 +23,12 @@ public:
     // Reset training and distributions
     void reset();
 
-    // Perform an iteration of training/updating the guiding structures
+    // Perform iteration of training/updating guiding structures
     void train(int sampleCount);
+
+    // Pre-processing and post-processing frame hooks
+    void preprocess();
+    void postprocess();
 
     // Free any allocated memory/resources
     void destroy();

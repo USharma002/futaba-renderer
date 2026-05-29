@@ -9,6 +9,8 @@
 
 namespace futaba {
 
+HD void sample1D_device(const float* cdf, int n, float funcSum, float u, int &index, float &du, float &pdf);
+
 // Simple 1D distribution helper (host-side construction, device-side sampling
 // helpers are provided as HD functions). This is intentionally minimal and
 // designed to be embedded into device-visible arrays by copying raw floats.
@@ -47,25 +49,7 @@ struct Distribution1D {
     // Sample discrete index and return pdf and offset within cell [0,1)
     // u in [0,1)
     void sample(float u, int& index, float& pdf, float& du) const {
-        const int n = (int)func.size();
-        if (n == 0) { index = -1; pdf = 0.f; du = 0.f; return; }
-
-        // Binary search in cdf (host-side; device helper provided separately)
-        int lo = 0, hi = n;
-        while (lo < hi) {
-            int mid = (lo + hi) >> 1;
-            if (cdf[mid+1] <= u) lo = mid + 1; else hi = mid;
-        }
-        index = lo;
-        float c0 = cdf[index];
-        float c1 = cdf[index+1];
-        if (c1 - c0 <= 0.f) {
-            du = 0.f;
-            pdf = (funcSum > 0.f) ? (1.f / float(n)) : 0.f;
-        } else {
-            du = (u - c0) / (c1 - c0);
-            pdf = (funcSum > 0.f) ? ((c1 - c0) * funcSum) : 0.f;
-        }
+        sample1D_device(cdfData(), size(), funcSum, u, index, du, pdf);
     }
 
     // Host accessor to raw arrays for transfer
@@ -129,39 +113,13 @@ HD void sample1D_device(const float* cdf, int n, float funcSum, float u, int &in
 // - funcSums: pointer to nv funcSum values per row
 // Note: For simplicity we expect layout where condCdfs is a contiguous block of (nv*(nu+1)) floats.
 HD void sample2D_device(const float* condCdfs, int nu, int nv, const float* rowSums, const float* marginalCdf, float marginalSum, const Point2f& samp, int &iu, int &iv, float &du, float &dv, float &pdf) {
-    // sample row v
-    float u1 = samp.y;
-    int v = findIntervalDevice(marginalCdf, nv, u1);
-    float mv0 = marginalCdf[v];
-    float mv1 = marginalCdf[v+1];
-    float dv_local = 0.f;
     float pdf_v = 0.f;
-    if (mv1 - mv0 <= 0.f) {
-        dv_local = 0.f;
-        pdf_v = (marginalSum > 0.f) ? (1.f / float(nv)) : 0.f;
-    } else {
-        dv_local = (u1 - mv0) / (mv1 - mv0);
-        pdf_v = (marginalSum > 0.f) ? ((mv1 - mv0) * marginalSum) : 0.f;
-    }
+    sample1D_device(marginalCdf, nv, marginalSum, samp.y, iv, dv, pdf_v);
 
-    // sample column u within row v
-    const float* rowCdf = condCdfs + (size_t)v * (nu + 1);
-    float u0 = samp.x;
-    int u = findIntervalDevice(rowCdf, nu, u0);
-    float r0 = rowCdf[u];
-    float r1 = rowCdf[u+1];
-    float du_local = 0.f;
+    const float* rowCdf = condCdfs + (size_t)iv * (nu + 1);
     float pdf_u = 0.f;
-    if (r1 - r0 <= 0.f) {
-        du_local = 0.f;
-        pdf_u = (rowSums[v] > 0.f) ? (1.f / float(nu)) : 0.f;
-    } else {
-        du_local = (u0 - r0) / (r1 - r0);
-        pdf_u = (rowSums[v] > 0.f) ? ((r1 - r0) * rowSums[v]) : 0.f;
-    }
+    sample1D_device(rowCdf, nu, rowSums[iv], samp.x, iu, du, pdf_u);
 
-    iu = u; iv = v;
-    du = du_local; dv = dv_local;
     pdf = pdf_v * pdf_u; // joint pdf in original func units (not normalized to 1)
 }
 

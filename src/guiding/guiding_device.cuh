@@ -28,8 +28,8 @@ struct GuidingDistribution {
             // TODO: Query SD-Tree representation at position `p` for direction `bs.wo`
             return Color3f(1.f); // placeholder
         }
-        if (mode == PATH_GUIDING_VMM) {
-            // TODO: Query VMM representation at position `p` for direction `bs.wo`
+        if (mode == PATH_GUIDING_NPM) {
+            // TODO: Query NPM representation at position `p` for direction `bs.wo`
             return Color3f(1.f); // placeholder
         }
         return Color3f(0.f);
@@ -46,8 +46,8 @@ struct GuidingDistribution {
             if (Frame::cos_theta(bs.wo) <= 0.f) return 0.f;
             return Warp::squareToCosineHemispherePdf(bs.wo);
         }
-        if (mode == PATH_GUIDING_VMM) {
-            // TODO: Evaluate VMM PDF at position `p` for direction `bs.wo`
+        if (mode == PATH_GUIDING_NPM) {
+            // TODO: Evaluate NPM PDF at position `p` for direction `bs.wo`
             if (Frame::cos_theta(bs.wo) <= 0.f) return 0.f;
             return Warp::squareToCosineHemispherePdf(bs.wo);
         }
@@ -72,8 +72,8 @@ struct GuidingDistribution {
             bs.sampled_type = BSDF_ID_DIFFUSE; // placeholder or custom ID
             return bs.weight;
         }
-        if (mode == PATH_GUIDING_VMM) {
-            // TODO: Sample direction wo from VMM at position `p`
+        if (mode == PATH_GUIDING_NPM) {
+            // TODO: Sample direction wo from NPM at position `p`
             bs.wo = Warp::squareToCosineHemisphere(s2);
             bs.pdf = Warp::squareToCosineHemispherePdf(bs.wo);
             bs.weight = Color3f(1.f);

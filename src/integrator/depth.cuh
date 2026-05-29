@@ -21,7 +21,6 @@ struct Depth {
 
         return Color3f(1.0/ (si.t + 1e-5f)); // Invert and add epsilon to avoid division by zero
 
-        // return Color3f(si.t);
     }
 };
 

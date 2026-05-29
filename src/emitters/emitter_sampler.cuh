@@ -5,10 +5,35 @@
 #include "surface_interaction.cuh"
 #include "emitter_sample.cuh"
 #include "area.cuh"
+#include "power_sampler.cuh"
+#include "launch_params.h"
 
 namespace futaba {
 
-// Power-weighted area-light sampler with env-map fallback.
+// ---------------------------------------------------------------------------
+// Emitter Sampler Interface Requirements:
+// 
+// Any light sampler (e.g., UniformEmitterSampler, PowerEmitterSampler)
+// must implement the following compile-time static interface:
+//
+// 1. A sampling method:
+//    HD bool sample(const Scene& scene,
+//                   const SurfaceIntersection& ref,
+//                   const Point3f& u,
+//                   EmitterSample& es) const;
+//    - Selects an emitter and samples a point/direction on it.
+//    - Populates the EmitterSample struct (solid-angle PDF, radiance, etc.).
+//    - Returns true if sampling succeeded, false otherwise.
+//
+// 2. A probability density evaluation method:
+//    HD float pdf(const Scene& scene,
+//                 int emitter_primitive_id,
+//                 const Vector3f& wi,
+//                 float dist) const;
+//    - Computes the solid-angle PDF of sampling the given direction/emitter
+//      from the reference shading point.
+//    - If emitter_primitive_id is -1, evaluates the PDF for environment map.
+// ---------------------------------------------------------------------------
 struct UniformEmitterSampler {
 
     HD bool sample(const Scene&              scene,
@@ -115,10 +140,10 @@ private:
 
         if (em.type == kEmitterTypePoint) {
             const Vector3f v  = em.position - ref.p;
-            const float    d2 = dot(v, v);
-            const float    d  = sqrtf(d2);
+            const float    d  = v.length();
             if (d < 1e-8f) return false;
-            es.p = em.position; es.d = v * (1.f / d); es.dist = d;
+            const float    d2 = d * d;
+            es.p = em.position; es.d = v / d; es.dist = d;
             es.pdf = 1.f; es.Le = em.radiance / d2; es.delta = true;
             return true;
         }
@@ -141,6 +166,38 @@ private:
         es.d = d; es.dist = 1e30f; es.pdf = pdf;
         es.Le = scene.envMap.eval(d); es.delta = false;
         return true;
+    }
+};
+
+struct EmitterSampler {
+    int type;
+
+    HD explicit EmitterSampler(int t = LIGHT_SAMPLER_UNIFORM) : type(t) {}
+
+    HD bool sample(const Scene&              scene,
+                   const SurfaceIntersection& ref,
+                   const Point3f&             u,
+                   EmitterSample&             es) const
+    {
+        if (type == LIGHT_SAMPLER_UNIFORM) {
+            return UniformEmitterSampler{}.sample(scene, ref, u, es);
+        } else if (type == LIGHT_SAMPLER_POWER) {
+            return PowerEmitterSampler{}.sample(scene, ref, u, es);
+        }
+        return false;
+    }
+
+    HD float pdf(const Scene&   scene,
+                 int             emitter_primitive_id,
+                 const Vector3f& wi,
+                 float           dist) const
+    {
+        if (type == LIGHT_SAMPLER_UNIFORM) {
+            return UniformEmitterSampler{}.pdf(scene, emitter_primitive_id, wi, dist);
+        } else if (type == LIGHT_SAMPLER_POWER) {
+            return PowerEmitterSampler{}.pdf(scene, emitter_primitive_id, wi, dist);
+        }
+        return 0.f;
     }
 };
 
