@@ -65,16 +65,16 @@ Futaba is a high-performance, learning-oriented physically-based renderer writte
   - [x] Path tracing
   - [x] Next Event Estimation (NEE)
   - [x] OptiX denoising
+  - [x] Volume Rendering (Volumetric path tracer, Homogeneous medium)
 - [~] Partially done
   - [~] Materials
   - [~] Textures and environment map support
   - [~] Multiple Importance Sampling (MIS)
+  - [~] Path Guiding (PPG, SD-Tree, Neural training buffer)
 - [ ] Not started
-  - [ ] Path Guiding (PPG, SDMM, NPM etc.)
   - [ ] Bidirectional Path Tracing
   - [ ] Photon Mapping
   - [ ] Radiosity
-  - [ ] Volume Rendering
   - [ ] Basic Differentiable Rendering
 
 ## Architecture Overview
@@ -89,119 +89,69 @@ Futaba is a high-performance, learning-oriented physically-based renderer writte
 
 
 ```mermaid
-
+%%{init: {'flowchart': {'curve': 'linear'}}}%%
 flowchart TD
 
-  
-
 %% Styling
-
 classDef cpu fill:#e3f2fd,stroke:#1565c0,stroke-width:2px,color:#000;
-
 classDef gpu fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px,color:#000;
-
 classDef data fill:#fff3e0,stroke:#e65100,stroke-width:2px,color:#000;
 
-  
-
 %% Nodes
-
 main[main.cpp]:::cpu
-
 FS[FutabaScreen]:::cpu
-
 SL[SceneLoader]:::cpu
-
 LS[LoadedScene CPU]:::data
-
 RH[RendererHost]:::cpu
 
-  
-
 OPTIX[OptixPipeline]:::cpu
-
 KERNEL[CUDA Render Kernel]:::gpu
-
 SGPU[Scene GPU]:::gpu
 
-  
-
 SAMP[Sampler]:::gpu
-
 CAM[PerspectiveCamera]:::gpu
-
 INTG[Integrator]:::gpu
-
 FILM[HDRFilm]:::data
-
-  
+DENOISE[DenoiserManager]:::gpu
+GUIDE[Guiding & Training Buffer]:::data
 
 BVH[BVH / Nodes]:::data
-
 TRIS[Geometry]:::data
-
 MATS[Materials]:::data
-
 EMITS[Emitters]:::data
 
-  
-
 %% CPU / App Flow
-
 main --> FS
-
 FS -->|Loads XML| SL
-
 SL -->|Builds| LS
-
 LS -->|Passes to| RH
-
 FS -->|Drives| RH
 
-  
-
 %% CPU to GPU Boundary
-
 RH -->|Configures| OPTIX
-
 RH -->|Allocates| SGPU
-
 RH -->|Dispatches| KERNEL
 
-  
-
 %% GPU Data Structure
-
 SGPU --> BVH
-
 SGPU --> TRIS
-
 SGPU --> MATS
-
 SGPU --> EMITS
 
-  
-
 %% GPU Execution
-
 KERNEL --> SAMP
-
 KERNEL --> CAM
-
 KERNEL --> INTG
 
-  
-
 INTG -->|Query & Shade| SGPU
+INTG -->|Records Path Data| GUIDE
+GUIDE -->|Guides Rays| INTG
 
-  
-
-%% Output
-
+%% Output & Denoising
 KERNEL -->|Accumulate| FILM
-
+FS -->|Executes Denoising| DENOISE
+DENOISE -->|Denoises Beauty/Albedo/Normal| FILM
 FILM -.->|Display Texture| FS
-
 ```
 
 ## Building and Running
