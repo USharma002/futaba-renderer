@@ -34,6 +34,22 @@ add_executable(struct_sizes
     src/tests/test.cpp
 )
 
+add_executable(dtree_viewer
+    src/tests/dtree_viewer.cpp
+)
+
+add_executable(dist_viewer
+    src/tests/dist_viewer.cpp
+)
+
+add_executable(warptest
+    src/tests/warptest.cpp
+)
+
+add_executable(stree_viewer
+    src/tests/stree_viewer.cpp
+)
+
 find_path(OPTIX_INCLUDE_DIR optix.h
     HINTS
     "C:/ProgramData/NVIDIA Corporation/OptiX SDK 9.0.0/include"
@@ -41,10 +57,18 @@ find_path(OPTIX_INCLUDE_DIR optix.h
 if(OPTIX_INCLUDE_DIR)
     target_include_directories(app PRIVATE ${OPTIX_INCLUDE_DIR})
     target_include_directories(struct_sizes PRIVATE ${OPTIX_INCLUDE_DIR})
+    target_include_directories(dtree_viewer PRIVATE ${OPTIX_INCLUDE_DIR})
+    target_include_directories(dist_viewer PRIVATE ${OPTIX_INCLUDE_DIR})
+    target_include_directories(warptest PRIVATE ${OPTIX_INCLUDE_DIR})
+    target_include_directories(stree_viewer PRIVATE ${OPTIX_INCLUDE_DIR})
 endif()
 
 # Force GLAD macro for Windows OpenGL
 target_compile_definitions(app PRIVATE NANOGUI_GLAD)
+target_compile_definitions(dtree_viewer PRIVATE NANOGUI_GLAD)
+target_compile_definitions(dist_viewer PRIVATE NANOGUI_GLAD)
+target_compile_definitions(warptest PRIVATE NANOGUI_GLAD)
+target_compile_definitions(stree_viewer PRIVATE NANOGUI_GLAD)
 
 set(APP_INCLUDES
     ${CMAKE_CURRENT_SOURCE_DIR}
@@ -78,6 +102,10 @@ set(APP_INCLUDES
 
 target_include_directories(app PRIVATE ${APP_INCLUDES})
 target_include_directories(struct_sizes PRIVATE ${APP_INCLUDES})
+target_include_directories(dtree_viewer PRIVATE ${APP_INCLUDES})
+target_include_directories(dist_viewer PRIVATE ${APP_INCLUDES})
+target_include_directories(warptest PRIVATE ${APP_INCLUDES})
+target_include_directories(stree_viewer PRIVATE ${APP_INCLUDES})
 
 # Build renderer_device.cu as PTX
 set(PTX_OUTPUT_DIR "${CMAKE_BINARY_DIR}/ptx")
@@ -103,6 +131,7 @@ add_custom_command(
     DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/gui/renderer_device.cu"
             "${CMAKE_CURRENT_SOURCE_DIR}/src/gui/launch_params.h"
             "${CMAKE_CURRENT_SOURCE_DIR}/src/guiding/guiding.h"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/guiding/ppg/adam.cuh"
             "${CMAKE_CURRENT_SOURCE_DIR}/src/guiding/guiding_device.cuh"
             "${CMAKE_CURRENT_SOURCE_DIR}/src/emitters/emitter.cuh"
             "${CMAKE_CURRENT_SOURCE_DIR}/src/emitters/emitter_sample.cuh"
@@ -137,5 +166,25 @@ target_link_libraries(app PRIVATE
 )
 
 target_link_libraries(struct_sizes PRIVATE
+    CUDA::cudart
+)
+
+target_link_libraries(dtree_viewer PRIVATE
+    nanogui
+    CUDA::cudart
+)
+
+target_link_libraries(dist_viewer PRIVATE
+    nanogui
+    CUDA::cudart
+)
+
+target_link_libraries(warptest PRIVATE
+    nanogui
+    CUDA::cudart
+)
+
+target_link_libraries(stree_viewer PRIVATE
+    nanogui
     CUDA::cudart
 )

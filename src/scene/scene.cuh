@@ -39,8 +39,8 @@ struct Scene {
 
     float*          emitterTriangleCdf = nullptr;
     int*            emissiveTriangleIndices = nullptr; // maps cdf index -> global triangle index
-    int*            emissiveGlobalToIndex = nullptr; // maps global triangle idx -> emissive array idx or -1
-    int*            nonAreaEmitterIndices = nullptr; // device array of indices into emitters[]
+    int*            emissiveGlobalToIndex = nullptr;   // maps global triangle idx -> emissive array idx or -1
+    int*            nonAreaEmitterIndices = nullptr;   // device array of indices into emitters[]
 
     EnvironmentMapEmitter envMap;
 

@@ -1282,7 +1282,7 @@ void FutabaScreen::updateVisualizerDropdown() {
     std::vector<std::string> items;
     if (m_pathGuidingMode == futaba::PATH_GUIDING_NONE) {
         items = {"Active"};
-    } else if (m_pathGuidingMode == futaba::PATH_GUIDING_SD_TREE) {
+    } else if (m_pathGuidingMode == futaba::PATH_GUIDING_PPG) {
         items = {"Active", "Position", "Outgoing Angle (wo)", "Incoming Radiance"};
     } else if (m_pathGuidingMode == futaba::PATH_GUIDING_NPM) {
         items = {"Active", "Position", "Normals", "Incoming Angle (wi)", "Outgoing Angle (wo)", "Incoming Radiance", "Material ID"};

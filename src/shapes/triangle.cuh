@@ -28,7 +28,7 @@ struct Triangle {
 
 
     HD bool intersect(const Ray& r, float t_min, float t_max, SurfaceIntersection& rec, bool use_vertex_normals, int primitive_id = -1) const {
-        // Möller–Trumbore ray-triangle intersection algorithm
+        // Möller-Trumbore ray-triangle intersection algorithm
         Vector3f edge1 = p1 - p0;
         Vector3f edge2 = p2 - p0;
 

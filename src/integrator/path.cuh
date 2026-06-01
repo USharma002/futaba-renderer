@@ -136,7 +136,7 @@ struct Path {
                 tb.active[buf_idx] = 1.0f;
 
                 if (hit) {
-                    if (guiding_mode == PATH_GUIDING_SD_TREE || guiding_mode == PATH_GUIDING_NPM) {
+                    if (guiding_mode == PATH_GUIDING_PPG || guiding_mode == PATH_GUIDING_NPM) {
                         if (tb.position) tb.position[buf_idx] = si.p;
                     }
                     if (guiding_mode == PATH_GUIDING_NPM) {
@@ -160,7 +160,7 @@ struct Path {
                                         const Color3f* local_Le, const Color3f* local_nee, const Color3f* local_bsdf) const
     {
         if constexpr (RecordTraining) {
-            if (record_training && tb.radiance && (guiding_mode == PATH_GUIDING_SD_TREE || guiding_mode == PATH_GUIDING_NPM)) {
+            if (record_training && tb.radiance && (guiding_mode == PATH_GUIDING_PPG || guiding_mode == PATH_GUIDING_NPM)) {
                 Color3f incoming = Color3f(0.f);
                 constexpr int MAX_LOCAL_DEPTH = 16;
                 int start_depth = (final_depth < MAX_LOCAL_DEPTH) ? final_depth - 1 : MAX_LOCAL_DEPTH - 1;
@@ -298,7 +298,7 @@ struct Path {
                     local_bsdf[depth] = bsdf_w * bs.pdf;
                 }
                 if (record_training && depth < tb.max_depth && tb.wo) {
-                    if (guiding_mode == PATH_GUIDING_SD_TREE || guiding_mode == PATH_GUIDING_NPM) {
+                    if (guiding_mode == PATH_GUIDING_PPG || guiding_mode == PATH_GUIDING_NPM) {
                         int buf_idx = depth * tb.img_size + tb.pixel_index;
                         tb.wo[buf_idx] = bs.wo;
                     }

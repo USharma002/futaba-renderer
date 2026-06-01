@@ -70,6 +70,8 @@ struct Point2 {
 
     // Point + Vector = Point
     HD Point2 operator+(const Vector2<T>& v) const { return Point2(x + v.x, y + v.y); }
+    // Point + Point = Point (convenience for axis-aligned bounds arithmetic)
+    HD Point2 operator+(const Point2& p) const { return Point2(x + p.x, y + p.y); }
     // Point - Point = Vector
     HD Vector2<T> operator-(const Point2& p) const { return Vector2<T>(x - p.x, y - p.y); }
     // Point - Vector = Point
@@ -78,6 +80,7 @@ struct Point2 {
     // For affine combinations
     HD Point2 operator*(T s) const { return Point2(x * s, y * s); }
     HD Point2& operator+=(const Vector2<T>& v) { x += v.x; y += v.y; return *this; }
+    HD Point2& operator+=(const Point2& p) { x += p.x; y += p.y; return *this; }
     HD Point2& operator-=(const Vector2<T>& v) { x -= v.x; y -= v.y; return *this; }
     
     HD T& operator[](int i) { return (&x)[i]; }
