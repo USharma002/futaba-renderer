@@ -47,7 +47,8 @@ private:
   nanogui::Label *m_fpsLabel = nullptr;
   nanogui::Label *m_sceneLabel = nullptr;
   nanogui::Label *m_triCountLabel = nullptr;
-  nanogui::Window *m_phongWindow = nullptr;
+  nanogui::Window *m_integratorSettingsWindow = nullptr;
+  nanogui::Window *m_guidingSettingsWindow = nullptr;
   nanogui::Window *m_settingsWindow = nullptr;
   nanogui::Window *m_mainSettingsWindow = nullptr;
   nanogui::Slider *m_fovSlider = nullptr;
@@ -91,11 +92,7 @@ private:
   float m_currentFocusDistance = 1.f;
   float m_currentApertureRadius = 0.0f;
 
-  ::Vector3f m_phongLightDir = ::Vector3f(1.f, 1.f, 1.f);
-  float m_phongAmbient = 0.12f;
-  float m_phongDiffuse = 0.88f;
-  float m_phongSpecular = 0.35f;
-  float m_phongShininess = 32.f;
+
 
   // Training Buffer Manager
   futaba::TrainingBufferManager m_trainManager;
@@ -119,6 +116,8 @@ private:
   void updateVisualizerDropdown();
   void preprocess();
   void postprocess();
+  void updateIntegratorUI();
+  void updateGuidingUI();
 
   std::vector<cudaArray*>          m_cudaTextureArrays;
   std::vector<cudaTextureObject_t> m_cudaTextureObjects;

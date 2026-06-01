@@ -21,6 +21,7 @@ add_executable(app
     main.cpp 
     src/gui/renderer_host.cpp 
     src/gui/gui.cpp
+    src/gui/integrator_ui.cpp
     src/films/bitmap.cpp
     src/parser/scene_loader.cpp 
     ext/pugixml/src/pugixml.cpp

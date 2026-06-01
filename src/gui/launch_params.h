@@ -53,6 +53,10 @@ struct LaunchParams {
     Color3f* denoise_albedo_buffer;
     Color3f* denoise_normal_buffer;
     int path_guiding_mode;
+    STreeNode* sTreeNodes;
+    AABB       sTreeAABB;
+    float      bsdf_sampling_fraction;
+    int        ppg_distribution_mode;
 
     // Training buffers (shape: max_depth x height x width)
     float* train_active;
@@ -61,6 +65,7 @@ struct LaunchParams {
     Color3f* train_wi;
     Color3f* train_wo;
     Color3f* train_radiance;
+    float* train_direction_pdf;
     float* train_material_id;
 
     // Visualization parameters

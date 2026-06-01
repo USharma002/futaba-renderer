@@ -41,3 +41,18 @@ struct Primitives {
   }
 };
 } // namespace futaba
+
+#if !defined(__CUDACC__) && defined(NANOGUI_GLAD)
+#include "integrator_ui.h"
+
+namespace futaba {
+
+class PrimitivesIntegratorUI : public IntegratorUI {
+public:
+    std::string getName() const override { return "Primitives"; }
+    int getMode() const override { return INTEGRATOR_PRIMITIVES; }
+};
+
+} // namespace futaba
+#endif
+

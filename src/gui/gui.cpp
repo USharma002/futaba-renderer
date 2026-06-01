@@ -4,6 +4,7 @@
 #include "renderer.h"
 #include "distribution.cuh"
 #include "scene_loader.h"
+#include "integrator_ui.h"
 #include <filesystem>
 #include <algorithm>
 #include <functional>
@@ -182,14 +183,25 @@ FutabaScreen::FutabaScreen(int width, int height)
     
 
     new Label(window, "Integrator", "sans-bold");
-    m_integratorCombo =
-            new ComboBox(window, {"Path", "Normals", "Depth", "Albedo", "Phong", "Primitives", "Heatmap", "VolPath"});
-    m_integratorCombo->setSelectedIndex((int)m_integratorMode);
+    std::vector<std::string> integratorNames;
+    for (const auto& integrator : IntegratorRegistry::getIntegrators()) {
+        integratorNames.push_back(integrator->getName());
+    }
+    m_integratorCombo = new ComboBox(window, integratorNames);
+    
+    int integratorIndex = 0;
+    auto integrators = IntegratorRegistry::getIntegrators();
+    for (size_t i = 0; i < integrators.size(); ++i) {
+        if (integrators[i]->getMode() == m_integratorMode) {
+            integratorIndex = (int)i;
+            break;
+        }
+    }
+    m_integratorCombo->setSelectedIndex(integratorIndex);
     m_integratorCombo->setCallback([this](int index) {
-        m_integratorMode = index;
-        if (m_phongWindow)
-            m_phongWindow->setVisible(index == futaba::INTEGRATOR_PHONG);
-        performLayout();
+        auto activeInt = IntegratorRegistry::getIntegrators()[index];
+        m_integratorMode = activeInt->getMode();
+        updateIntegratorUI();
         m_film->clear();
     });
 
@@ -233,10 +245,23 @@ FutabaScreen::FutabaScreen(int width, int height)
             m_useDenoiser = (index == 1);
         });
 
-        // 3. Path Guiding dropdown (skeleton setup)
+        // 3. Path Guiding dropdown
         new Label(settingsGrid, "Path Guiding", "sans-bold");
-        ComboBox *guidingCombo = new ComboBox(settingsGrid, {"None", "SD-Tree (PPG)", "NPM (Neural)"});
-        guidingCombo->setSelectedIndex((int)m_pathGuidingMode);
+        std::vector<std::string> guidingNames;
+        for (const auto& method : GuidingRegistry::getMethods()) {
+            guidingNames.push_back(method->getName());
+        }
+        ComboBox *guidingCombo = new ComboBox(settingsGrid, guidingNames);
+        
+        int guidingIndex = 0;
+        auto methods = GuidingRegistry::getMethods();
+        for (size_t i = 0; i < methods.size(); ++i) {
+            if (methods[i]->getMode() == m_pathGuidingMode) {
+                guidingIndex = (int)i;
+                break;
+            }
+        }
+        guidingCombo->setSelectedIndex(guidingIndex);
         guidingCombo->setFixedWidth(130);
 
         // 4. Collect Training Data checkbox
@@ -259,11 +284,14 @@ FutabaScreen::FutabaScreen(int width, int height)
         });
 
         guidingCombo->setCallback([this, cbTraining, guidingCombo](int index) {
-            m_pathGuidingMode = index;
-            if (index != 0 && !m_collectTraining) {
+            auto activeMethod = GuidingRegistry::getMethods()[index];
+            m_pathGuidingMode = activeMethod->getMode();
+            m_guiding.setMode((PathGuidingMode)m_pathGuidingMode);
+            if (m_pathGuidingMode != 0 && !m_collectTraining) {
                 m_collectTraining = true;
                 cbTraining->setChecked(true);
             }
+            updateGuidingUI();
             updateVisualizerDropdown();
             m_film->clear();
         });
@@ -277,48 +305,25 @@ FutabaScreen::FutabaScreen(int width, int height)
             }
         });
 
-    m_phongWindow = new Window(this, "Phong Controls");
-    m_phongWindow->setPosition(nanogui::Vector2i(245, 15));
-    m_phongWindow->setLayout(new GroupLayout(10, 5, 5, 5));
+        m_guidingSettingsWindow = new Window(this, "Guiding Controls");
+        m_guidingSettingsWindow->setPosition(nanogui::Vector2i(550, 15));
+        m_guidingSettingsWindow->setLayout(new GroupLayout(10, 5, 5, 5));
+        m_guidingSettingsWindow->setVisible(false);
 
-    // Close button for phong window
-    auto *phongCloseBtn = new Button(m_phongWindow->buttonPanel(), "", ENTYPO_ICON_CROSS);
-    phongCloseBtn->setCallback([this] {
-        m_phongWindow->setVisible(false);
-    });
-
-
-    auto addPhongSlider = [this](const std::string &name, float minVal,
-                                 float maxVal, float initialValue,
-                                 const std::function<void(float)> &onChange) {
-        new Label(m_phongWindow, name, "sans-bold");
-        Widget *panel = new Widget(m_phongWindow);
-        panel->setLayout(
-                new BoxLayout(Orientation::Horizontal, Alignment::Middle, 0, 10));
-
-        Slider *slider = new Slider(panel);
-        slider->setFixedWidth(120);
-        slider->setValue(toUnitRange(initialValue, minVal, maxVal));
-
-        Label *valueLabel = new Label(panel, std::to_string(initialValue));
-        slider->setCallback([this, minVal, maxVal, valueLabel, onChange](float t) {
-            const float value = fromUnitRange(t, minVal, maxVal);
-            valueLabel->setCaption(std::to_string(value));
-            onChange(value);
-            m_film->clear();
+        auto *guidingCloseBtn = new Button(m_guidingSettingsWindow->buttonPanel(), "", ENTYPO_ICON_CROSS);
+        guidingCloseBtn->setCallback([this] {
+            m_guidingSettingsWindow->setVisible(false);
         });
-    };
 
-    addPhongSlider("Ambient", kMinPhongStrength, kMaxPhongStrength,
-                   m_phongAmbient, [this](float v) { m_phongAmbient = v; });
-    addPhongSlider("Diffuse", kMinPhongStrength, kMaxPhongStrength,
-                   m_phongDiffuse, [this](float v) { m_phongDiffuse = v; });
-    addPhongSlider("Specular", kMinPhongStrength, kMaxPhongStrength,
-                   m_phongSpecular, [this](float v) { m_phongSpecular = v; });
-    addPhongSlider("Shininess", kMinPhongShininess, kMaxPhongShininess,
-                   m_phongShininess, [this](float v) { m_phongShininess = v; });
+    m_integratorSettingsWindow = new Window(this, "Integrator Settings");
+    m_integratorSettingsWindow->setPosition(nanogui::Vector2i(245, 15));
+    m_integratorSettingsWindow->setLayout(new GroupLayout(10, 5, 5, 5));
+    m_integratorSettingsWindow->setVisible(false);
 
-    m_phongWindow->setVisible(m_integratorMode == futaba::INTEGRATOR_PHONG);
+    auto *integratorCloseBtn = new Button(m_integratorSettingsWindow->buttonPanel(), "", ENTYPO_ICON_CROSS);
+    integratorCloseBtn->setCallback([this] {
+        m_integratorSettingsWindow->setVisible(false);
+    });
 
     CheckBox *cbNormals = new CheckBox(window, "Use Vertex Normals");
     cbNormals->setChecked(m_useVertexNormals);
@@ -495,6 +500,14 @@ FutabaScreen::FutabaScreen(int width, int height)
     futaba::initOptix();
     m_denoiser.init(futaba::getOptixContext(), m_renderWidth, m_renderHeight);
     m_guiding.init(m_renderWidth, m_renderHeight);
+    {
+        AABB sceneBounds;
+        sceneBounds.minP = m_scene.boundsMin;
+        sceneBounds.maxP = m_scene.boundsMax;
+        m_guiding.setSceneBounds(sceneBounds);
+    }
+    updateIntegratorUI();
+    updateGuidingUI();
 
     // Create the centered loading window
     m_loadingWindow = new Window(this, "OptiX Initialization");
@@ -705,6 +718,12 @@ bool FutabaScreen::loadScene(const std::string &xmlPath) {
     m_scene.hasMedium = loaded.hasMedium;
     m_scene.mediumMeshId = loaded.mediumMeshId;
     m_scene.medium = Medium(MEDIUM_HOMOGENEOUS, HomogeneousMedium(loaded.mediumSigmaS, loaded.mediumSigmaA, loaded.mediumG));
+    {
+        AABB sceneBounds;
+        sceneBounds.minP = m_scene.boundsMin;
+        sceneBounds.maxP = m_scene.boundsMax;
+        m_guiding.setSceneBounds(sceneBounds);
+    }
 
     if (loaded.integratorType == "volpath") {
         m_integratorMode = futaba::INTEGRATOR_VOLPATH;
@@ -896,14 +915,18 @@ void FutabaScreen::renderLoop() {
             params.integrator_mode = m_integratorMode;
             params.tonemapping_mode = m_tonemappingMode;
             params.use_antialiasing = m_useAntialiasing;
-            params.phong_light_dir = m_phongLightDir;
-            params.phong_ambient = m_phongAmbient;
-            params.phong_diffuse = m_phongDiffuse;
-            params.phong_specular = m_phongSpecular;
-            params.phong_shininess = m_phongShininess;
             params.denoise_active = m_useDenoiser;
             params.path_guiding_mode = m_pathGuidingMode;
             params.light_sampler_type = m_lightSamplerType;
+
+            auto activeInt = IntegratorRegistry::getIntegrator(m_integratorMode);
+            if (activeInt) {
+                activeInt->updateLaunchParams(params);
+            }
+            auto activeMethod = GuidingRegistry::getMethod(m_pathGuidingMode);
+            if (activeMethod) {
+                activeMethod->updateLaunchParams(params);
+            }
 
             params.train_active = m_collectTraining ? m_trainManager.getActive() : nullptr;
             params.train_position = m_collectTraining ? m_trainManager.getPosition() : nullptr;
@@ -911,6 +934,7 @@ void FutabaScreen::renderLoop() {
             params.train_wi = m_collectTraining ? m_trainManager.getWi() : nullptr;
             params.train_wo = m_collectTraining ? m_trainManager.getWo() : nullptr;
             params.train_radiance = m_collectTraining ? m_trainManager.getRadiance() : nullptr;
+            params.train_direction_pdf = m_collectTraining ? m_trainManager.getDirectionPdf() : nullptr;
             params.train_material_id = m_collectTraining ? m_trainManager.getMaterialId() : nullptr;
 
             params.vis_pbo_ptr = d_vis_pbo_ptr;
@@ -1280,12 +1304,11 @@ void FutabaScreen::updateVisualizerDropdown() {
     if (!m_visCombo) return;
     
     std::vector<std::string> items;
-    if (m_pathGuidingMode == futaba::PATH_GUIDING_NONE) {
+    auto activeMethod = GuidingRegistry::getMethod(m_pathGuidingMode);
+    if (activeMethod) {
+        items = activeMethod->getVisualizerBuffers();
+    } else {
         items = {"Active"};
-    } else if (m_pathGuidingMode == futaba::PATH_GUIDING_PPG) {
-        items = {"Active", "Position", "Outgoing Angle (wo)", "Incoming Radiance"};
-    } else if (m_pathGuidingMode == futaba::PATH_GUIDING_NPM) {
-        items = {"Active", "Position", "Normals", "Incoming Angle (wi)", "Outgoing Angle (wo)", "Incoming Radiance", "Material ID"};
     }
     
     std::string currentSelectedStr = (m_visBufferType >= 0 && m_visBufferType < (int)g_allBufferNames.size()) 
@@ -1318,3 +1341,78 @@ void FutabaScreen::preprocess() {
 void FutabaScreen::postprocess() {
     m_guiding.postprocess();
 }
+
+void FutabaScreen::updateIntegratorUI() {
+    if (!m_integratorSettingsWindow) return;
+    
+    m_integratorSettingsWindow->setVisible(false);
+    
+    std::vector<Widget *> childrenToRemove;
+    for (auto *child : m_integratorSettingsWindow->children()) {
+        if (child != m_integratorSettingsWindow->buttonPanel()) {
+            childrenToRemove.push_back(child);
+        }
+    }
+    for (auto *child : childrenToRemove) {
+        m_integratorSettingsWindow->removeChild(child);
+    }
+    
+    auto activeInt = IntegratorRegistry::getIntegrator(m_integratorMode);
+    if (activeInt) {
+        activeInt->renderUI(m_integratorSettingsWindow, [this] { m_film->clear(); });
+        
+        int nonPanelChildCount = 0;
+        for (auto *child : m_integratorSettingsWindow->children()) {
+            if (child != m_integratorSettingsWindow->buttonPanel()) {
+                nonPanelChildCount++;
+            }
+        }
+        
+        if (nonPanelChildCount > 0) {
+            m_integratorSettingsWindow->setTitle(activeInt->getName() + " Controls");
+            m_integratorSettingsWindow->setVisible(true);
+        }
+    }
+    performLayout();
+}
+
+void FutabaScreen::updateGuidingUI() {
+    if (!m_guidingSettingsWindow) return;
+    
+    std::vector<Widget *> childrenToRemove;
+    for (auto *child : m_guidingSettingsWindow->children()) {
+        if (child != m_guidingSettingsWindow->buttonPanel()) {
+            childrenToRemove.push_back(child);
+        }
+    }
+    for (auto *child : childrenToRemove) {
+        m_guidingSettingsWindow->removeChild(child);
+    }
+    
+    auto activeMethod = GuidingRegistry::getMethod(m_pathGuidingMode);
+    if (activeMethod) {
+        activeMethod->renderUI(
+            m_guidingSettingsWindow,
+            [this] { m_film->clear(); },
+            [this] { m_guiding.train(m_trainManager, m_maxDepth, m_film); });
+
+        int nonPanelChildCount = 0;
+        for (auto *child : m_guidingSettingsWindow->children()) {
+            if (child != m_guidingSettingsWindow->buttonPanel()) {
+                nonPanelChildCount++;
+            }
+        }
+
+        if (nonPanelChildCount > 0) {
+            m_guidingSettingsWindow->setTitle(activeMethod->getName() + " Controls");
+            m_guidingSettingsWindow->setVisible(true);
+        } else {
+            m_guidingSettingsWindow->setVisible(false);
+        }
+    } else {
+        m_guidingSettingsWindow->setVisible(false);
+    }
+    
+    performLayout();
+}
+

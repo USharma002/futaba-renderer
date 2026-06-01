@@ -46,3 +46,18 @@ private:
 };
 
 } // namespace futaba
+
+#if !defined(__CUDACC__) && defined(NANOGUI_GLAD)
+#include "integrator_ui.h"
+
+namespace futaba {
+
+class HeatmapIntegratorUI : public IntegratorUI {
+public:
+    std::string getName() const override { return "Heatmap"; }
+    int getMode() const override { return INTEGRATOR_HEATMAP; }
+};
+
+} // namespace futaba
+#endif
+

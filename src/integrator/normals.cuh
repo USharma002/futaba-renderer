@@ -23,3 +23,18 @@ struct Normals {
 };
 
 } // namespace futaba
+
+#if !defined(__CUDACC__) && defined(NANOGUI_GLAD)
+#include "integrator_ui.h"
+
+namespace futaba {
+
+class NormalsIntegratorUI : public IntegratorUI {
+public:
+    std::string getName() const override { return "Normals"; }
+    int getMode() const override { return INTEGRATOR_NORMALS; }
+};
+
+} // namespace futaba
+#endif
+

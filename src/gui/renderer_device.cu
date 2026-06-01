@@ -148,6 +148,7 @@ extern "C" __global__ void __raygen__path() {
     tb.wi = params.train_wi;
     tb.wo = params.train_wo;
     tb.radiance = params.train_radiance;
+    tb.direction_pdf = params.train_direction_pdf;
     tb.material_id = params.train_material_id;
     tb.max_depth = params.max_depth;
     tb.pixel_index = index;
@@ -157,21 +158,30 @@ extern "C" __global__ void __raygen__path() {
       radiance = integrator.sample<true, true>(
           ray, params.scene, sampler, tb,
           params.denoise_albedo_buffer, params.denoise_normal_buffer,
-          index, params.sampleCount, &params.camera, params.path_guiding_mode);
+          index, params.sampleCount, &params.camera, params.path_guiding_mode,
+          params.sTreeNodes, params.sTreeAABB, params.bsdf_sampling_fraction,
+          params.ppg_distribution_mode);
     } else {
       radiance = integrator.sample<true, false>(
           ray, params.scene, sampler, tb,
-          nullptr, nullptr, -1, 1, nullptr, params.path_guiding_mode);
+          nullptr, nullptr, -1, 1, nullptr, params.path_guiding_mode,
+          params.sTreeNodes, params.sTreeAABB, params.bsdf_sampling_fraction,
+          params.ppg_distribution_mode);
     }
   } else {
     if (params.denoise_active && params.denoise_albedo_buffer && params.denoise_normal_buffer) {
       radiance = integrator.sample<false, true>(
           ray, params.scene, sampler, TrainingBuffers(),
           params.denoise_albedo_buffer, params.denoise_normal_buffer,
-          index, params.sampleCount, &params.camera, params.path_guiding_mode);
+          index, params.sampleCount, &params.camera, params.path_guiding_mode,
+          params.sTreeNodes, params.sTreeAABB, params.bsdf_sampling_fraction,
+          params.ppg_distribution_mode);
     } else {
       radiance = integrator.sample<false, false>(
-          ray, params.scene, sampler);
+          ray, params.scene, sampler, TrainingBuffers(),
+          nullptr, nullptr, -1, 1, nullptr, params.path_guiding_mode,
+          params.sTreeNodes, params.sTreeAABB, params.bsdf_sampling_fraction,
+          params.ppg_distribution_mode);
     }
   }
 

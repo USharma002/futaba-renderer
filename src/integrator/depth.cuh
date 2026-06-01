@@ -25,3 +25,18 @@ struct Depth {
 };
 
 } // namespace futaba
+
+#if !defined(__CUDACC__) && defined(NANOGUI_GLAD)
+#include "integrator_ui.h"
+
+namespace futaba {
+
+class DepthIntegratorUI : public IntegratorUI {
+public:
+    std::string getName() const override { return "Depth"; }
+    int getMode() const override { return INTEGRATOR_DEPTH; }
+};
+
+} // namespace futaba
+#endif
+

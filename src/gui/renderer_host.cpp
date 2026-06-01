@@ -168,6 +168,17 @@ extern OptixDeviceContext getOptixContext();
 extern void initOptix();
 } // namespace futaba
 
+#define OPTIX_CHECK_LOG(call, logBuffer)                                       \
+    do {                                                                       \
+        OptixResult _res = (call);                                             \
+        if (_res != OPTIX_SUCCESS) {                                           \
+            std::cerr << "OptiX call (" #call ") failed with error code: "     \
+                      << _res << std::endl;                                    \
+            std::cerr << "OptiX Log:\n" << (logBuffer) << std::endl;           \
+            exit(1);                                                           \
+        }                                                                      \
+    } while (0)
+
 struct EmptyRecord {
   __align__(
       OPTIX_SBT_RECORD_ALIGNMENT) char header[OPTIX_SBT_RECORD_HEADER_SIZE];
@@ -222,13 +233,14 @@ public:
     fread(ptxCode.data(), 1, ptxSize, fp);
     fclose(fp);
 
-    char log[2048];
+    char log[8192];
     size_t sizeof_log = sizeof(log);
 
     futaba::g_optixCompileProgress = 0.20f;
     futaba::g_optixCompileStatus = "Compiling OptiX device module...";
-    optixModuleCreate(context, &moduleCompileOptions, &pipelineCompileOptions,
-                      ptxCode.data(), ptxSize, log, &sizeof_log, &module);
+    OPTIX_CHECK_LOG(optixModuleCreate(context, &moduleCompileOptions, &pipelineCompileOptions,
+                                      ptxCode.data(), ptxSize, log, &sizeof_log, &module),
+                    log);
 
     // 3. Program Groups
     OptixProgramGroupOptions pgOptions = {};
@@ -241,8 +253,9 @@ public:
     raygenDescRender.raygen.module = module;
     raygenDescRender.raygen.entryFunctionName = "__raygen__render";
     sizeof_log = sizeof(log);
-    optixProgramGroupCreate(context, &raygenDescRender, 1, &pgOptions, log,
-                            &sizeof_log, &raygenProgGroupRender);
+    OPTIX_CHECK_LOG(optixProgramGroupCreate(context, &raygenDescRender, 1, &pgOptions, log,
+                                            &sizeof_log, &raygenProgGroupRender),
+                    log);
 
     futaba::g_optixCompileProgress = 0.40f;
     futaba::g_optixCompileStatus = "Creating shader programs (2/7)...";
@@ -252,8 +265,9 @@ public:
     raygenDescPath.raygen.module = module;
     raygenDescPath.raygen.entryFunctionName = "__raygen__path";
     sizeof_log = sizeof(log);
-    optixProgramGroupCreate(context, &raygenDescPath, 1, &pgOptions, log,
-                            &sizeof_log, &raygenProgGroupPath);
+    OPTIX_CHECK_LOG(optixProgramGroupCreate(context, &raygenDescPath, 1, &pgOptions, log,
+                                            &sizeof_log, &raygenProgGroupPath),
+                    log);
 
     futaba::g_optixCompileProgress = 0.45f;
     futaba::g_optixCompileStatus = "Creating shader programs (3/7)...";
@@ -263,8 +277,9 @@ public:
     raygenDescVolPath.raygen.module = module;
     raygenDescVolPath.raygen.entryFunctionName = "__raygen__volpath";
     sizeof_log = sizeof(log);
-    optixProgramGroupCreate(context, &raygenDescVolPath, 1, &pgOptions, log,
-                            &sizeof_log, &raygenProgGroupVolPath);
+    OPTIX_CHECK_LOG(optixProgramGroupCreate(context, &raygenDescVolPath, 1, &pgOptions, log,
+                                            &sizeof_log, &raygenProgGroupVolPath),
+                    log);
 
     futaba::g_optixCompileProgress = 0.50f;
     futaba::g_optixCompileStatus = "Creating shader programs (4/7)...";
@@ -274,8 +289,9 @@ public:
     missDesc.miss.module = module;
     missDesc.miss.entryFunctionName = "__miss__ms";
     sizeof_log = sizeof(log);
-    optixProgramGroupCreate(context, &missDesc, 1, &pgOptions, log, &sizeof_log,
-                            &missProgGroup);
+    OPTIX_CHECK_LOG(optixProgramGroupCreate(context, &missDesc, 1, &pgOptions, log, &sizeof_log,
+                                            &missProgGroup),
+                    log);
 
     futaba::g_optixCompileProgress = 0.55f;
     futaba::g_optixCompileStatus = "Creating shader programs (5/7)...";
@@ -285,8 +301,9 @@ public:
     hitDesc.hitgroup.moduleCH = module;
     hitDesc.hitgroup.entryFunctionNameCH = "__closesthit__ch";
     sizeof_log = sizeof(log);
-    optixProgramGroupCreate(context, &hitDesc, 1, &pgOptions, log, &sizeof_log,
-                            &hitProgGroup);
+    OPTIX_CHECK_LOG(optixProgramGroupCreate(context, &hitDesc, 1, &pgOptions, log, &sizeof_log,
+                                            &hitProgGroup),
+                    log);
 
     // Shadow miss
     futaba::g_optixCompileProgress = 0.60f;
@@ -297,8 +314,9 @@ public:
     shadowMissDesc.miss.module = module;
     shadowMissDesc.miss.entryFunctionName = "__miss__shadow";
     sizeof_log = sizeof(log);
-    optixProgramGroupCreate(context, &shadowMissDesc, 1, &pgOptions, log,
-                            &sizeof_log, &shadowMissProgGroup);
+    OPTIX_CHECK_LOG(optixProgramGroupCreate(context, &shadowMissDesc, 1, &pgOptions, log,
+                                            &sizeof_log, &shadowMissProgGroup),
+                    log);
 
     // Shadow hit (anyhit only, no closest-hit)
     futaba::g_optixCompileProgress = 0.65f;
@@ -309,8 +327,9 @@ public:
     shadowHitDesc.hitgroup.moduleAH = module;
     shadowHitDesc.hitgroup.entryFunctionNameAH = "__anyhit__shadow";
     sizeof_log = sizeof(log);
-    optixProgramGroupCreate(context, &shadowHitDesc, 1, &pgOptions, log,
-                            &sizeof_log, &shadowHitProgGroup);
+    OPTIX_CHECK_LOG(optixProgramGroupCreate(context, &shadowHitDesc, 1, &pgOptions, log,
+                                            &sizeof_log, &shadowHitProgGroup),
+                    log);
 
     // 4. Create Pipeline
     futaba::g_optixCompileProgress = 0.80f;
@@ -326,8 +345,9 @@ public:
     pipelineLinkOptions.maxTraceDepth = 1;
 
     sizeof_log = sizeof(log);
-    optixPipelineCreate(context, &pipelineCompileOptions, &pipelineLinkOptions,
-                        programGroups, 7, log, &sizeof_log, &pipeline);
+    OPTIX_CHECK_LOG(optixPipelineCreate(context, &pipelineCompileOptions, &pipelineLinkOptions,
+                                        programGroups, 7, log, &sizeof_log, &pipeline),
+                    log);
 
     // 5. Build SBT
     futaba::g_optixCompileProgress = 0.90f;
@@ -399,6 +419,14 @@ void launch_render(HDRFilm *film,
     params.denoise_normal_buffer = nullptr;
   }
 
+  // static int diagnosticFrameCounter = 0;
+  // if (diagnosticFrameCounter++ % 60 == 0) { // Print once every 60 frames to avoid spamming
+  //     std::cout << "[HOST LAUNCH] Mode: " << params.integrator_mode 
+  //               << " | train_active pointer sent to GPU: " << params.train_active 
+  //               << " | collect_flag matches: " << (params.train_active != nullptr ? "YES" : "NO") 
+  //               << " | Resolution: " << params.width << "x" << params.height << std::endl;
+  // }
+
   cudaMemcpy(reinterpret_cast<void *>(g_pipeline.d_params), &params,
              sizeof(LaunchParams), cudaMemcpyHostToDevice);
 
@@ -415,7 +443,6 @@ void launch_render(HDRFilm *film,
               g_pipeline.d_params, sizeof(LaunchParams), &g_pipeline.sbt, params.width,
               params.height, 1);
 
-  // If denoising is active, execute the denoiser pipeline (which computes autoexposure, denoises, tonemaps, and copies to PBO)
   if (params.denoise_active && denoiser) {
     denoiser->exec(
         film->d_pixels,
@@ -427,7 +454,6 @@ void launch_render(HDRFilm *film,
     );
   }
 
-  // Run training visualization kernel if active
   if (params.vis_active && params.vis_pbo_ptr) {
     run_visualization_kernel(
         params.train_active,

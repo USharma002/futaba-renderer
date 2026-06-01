@@ -25,3 +25,18 @@ struct Albedo {
 };
 
 } // namespace futaba
+
+#if !defined(__CUDACC__) && defined(NANOGUI_GLAD)
+#include "integrator_ui.h"
+
+namespace futaba {
+
+class AlbedoIntegratorUI : public IntegratorUI {
+public:
+    std::string getName() const override { return "Albedo"; }
+    int getMode() const override { return INTEGRATOR_ALBEDO; }
+};
+
+} // namespace futaba
+#endif
+

@@ -191,3 +191,18 @@ struct VolumetricPath {
 };
 
 } // namespace futaba
+
+#if !defined(__CUDACC__) && defined(NANOGUI_GLAD)
+#include "integrator_ui.h"
+
+namespace futaba {
+
+class VolPathIntegratorUI : public IntegratorUI {
+public:
+    std::string getName() const override { return "VolPath"; }
+    int getMode() const override { return INTEGRATOR_VOLPATH; }
+};
+
+} // namespace futaba
+#endif
+

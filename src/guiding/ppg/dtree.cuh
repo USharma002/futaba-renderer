@@ -5,6 +5,7 @@
 #include <stack>
 #include <cmath>
 #include <algorithm>
+#include <limits>
 
 #include "types.cuh"
 #include "common.cuh"
@@ -43,7 +44,11 @@ inline __host__ __device__ void atomic_add_float(float* address, float val) {
 }
 
 inline __host__ __device__ float logistic(float x) {
+#if defined(__CUDA_ARCH__)
+    return 1.f / (1.f + __expf(-x));
+#else
     return 1.f / (1.f + std::exp(-x));
+#endif
 }
 
 struct QuadTreeNode {
@@ -87,6 +92,7 @@ struct QuadTreeNode {
         return *this;
     }
 
+#ifndef __CUDA_ARCH__
     inline __host__ __device__ float pdf(Point2f& p, const QuadTreeNode* nodes) const {
         p.x = safe_max(0.0f, safe_min(p.x, 1.0f));
         p.y = safe_max(0.0f, safe_min(p.y, 1.0f));
@@ -116,7 +122,6 @@ struct QuadTreeNode {
         }
     }
 
-    // Template design allows execution via stateful trace samplers or stateless pseudo-samplers smoothly
     template <typename SamplerType>
     inline __host__ __device__ Point2f sample(SamplerType& sampler, const QuadTreeNode* nodes) const {
         int index = 0;
@@ -205,6 +210,7 @@ struct QuadTreeNode {
             return 1 + nodes[child(index)].depthAt(p, nodes);
         }
     }
+#endif
 
     inline __host__ __device__ uint32_t child(int index) const {
         return m_children[index];
@@ -236,13 +242,18 @@ struct QuadTreeNode {
         return m_children[index] == 0;
     }
 
-    inline __host__ void build(QuadTreeNode* nodes) {
+#ifndef __CUDA_ARCH__
+    inline __host__ void build(QuadTreeNode* nodes, int distributionMode = 0, float parentSize = 1.f) {
+        float childSize = parentSize / 4.f;
         for (int i = 0; i < 4; ++i) {
             if (isLeaf(i)) {
+                if (distributionMode == 2 || distributionMode == 3) { // L2 / Second Moment / Full L2
+                    setSum(i, std::sqrt(sum(i) * childSize));
+                }
                 continue;
             }
             QuadTreeNode& c = nodes[child(i)];
-            c.build(nodes);
+            c.build(nodes, distributionMode, childSize);
 
             float calculatedSum = 0.0f;
             for (int j = 0; j < 4; ++j) {
@@ -251,6 +262,7 @@ struct QuadTreeNode {
             setSum(i, calculatedSum);
         }
     }  
+#endif
 };
 
 struct DTreeRecord {
@@ -269,6 +281,7 @@ struct DTree {
     float m_statisticalWeight;
     int m_maxDepth;
 
+#ifndef __CUDA_ARCH__
     __host__ void initialize() {
         m_sum = 0.0f;
         m_statisticalWeight = 0.0f;
@@ -313,9 +326,10 @@ struct DTree {
         return *this;
     }
 
-    __host__ DTree(const DTree& other) : m_nodes(nullptr), m_numNodes(0) {
+    __host__ DTree(const DTree& other) : m_nodes(nullptr), m_numNodes(0), m_sum(0.f), m_statisticalWeight(0.f), m_maxDepth(0) {
         *this = other;
     }
+#endif
 
     inline __host__ __device__ const QuadTreeNode& node(size_t i) const { return m_nodes[i]; }
     inline __host__ __device__ QuadTreeNode& node(size_t i) { return m_nodes[i]; }
@@ -328,11 +342,51 @@ struct DTree {
         return factor * m_sum; 
     }
 
+    inline __host__ __device__ float eval(Point2f p) const {
+        p.x = safe_max(0.0f, safe_min(p.x, 1.0f));
+        p.y = safe_max(0.0f, safe_min(p.y, 1.0f));
+
+        const QuadTreeNode* curr = &m_nodes[0];
+        float factor = 1.f;
+
+        while (true) {
+            const int index = curr->childIndex(p);
+            if (curr->isLeaf(index)) {
+                return factor * 4.0f * curr->sum(index);
+            } else {
+                factor *= 4.0f;
+                curr = &m_nodes[curr->child(index)];
+            }
+        }
+    }
+
     inline __host__ __device__ float pdf(Point2f p) const {
         if (!(mean() > 0.0f)) {
             return 1.0f / (4.0f * M_PI); 
         }
-        return m_nodes[0].pdf(p, m_nodes) / (4.0f * M_PI); 
+        
+        p.x = safe_max(0.0f, safe_min(p.x, 1.0f));
+        p.y = safe_max(0.0f, safe_min(p.y, 1.0f));
+
+        const QuadTreeNode* curr = &m_nodes[0];
+        float factor = 1.f;
+
+        while (true) {
+            const int index = curr->childIndex(p);
+            float sumIndex = curr->sum(index);
+            if (!(sumIndex > 0.0f)) {
+                return 0.f;
+            }
+
+            float total = curr->sum(0) + curr->sum(1) + curr->sum(2) + curr->sum(3);
+            factor *= 4.0f * sumIndex / total;
+
+            if (curr->isLeaf(index)) {
+                return factor / (4.0f * M_PI);
+            } else {
+                curr = &m_nodes[curr->child(index)];
+            }
+        }
     }
     
     template <typename SamplerType>
@@ -341,18 +395,83 @@ struct DTree {
             return sampler.next2D();
         }
 
-        Point2f res = m_nodes[0].sample(sampler, m_nodes);
-        res.x = safe_max(0.0f, safe_min(res.x, 1.0f));
-        res.y = safe_max(0.0f, safe_min(res.y, 1.0f));
-        return res;
+        const QuadTreeNode* curr = &m_nodes[0];
+        Point2f origin = Point2f(0.f, 0.f);
+        float scale = 1.f;
+
+        while (true) {
+            int index = 0;
+            float topLeft = curr->sum(0);                     
+            float topRight = curr->sum(1);                    
+            float partial = topLeft + curr->sum(2);           
+            float total = partial + topRight + curr->sum(3);  
+
+            if (!(total > 0.0f)) {
+                Point2f nextSample = sampler.next2D();
+                Point2f res = origin + scale * nextSample;
+                res.x = safe_max(0.0f, safe_min(res.x, 1.0f));
+                res.y = safe_max(0.0f, safe_min(res.y, 1.0f));
+                return res;
+            }
+
+            float boundary = partial / total;
+            Point2f childOffset = Point2f(0.0f, 0.0f);
+            float sampleVal = sampler.next1D();
+
+            if (sampleVal < boundary) {
+                sampleVal /= boundary; 
+                boundary = topLeft / partial; 
+            } else {
+                partial = total - partial;
+                childOffset.x = 0.5f;
+                sampleVal = (sampleVal - boundary) / (1.0f - boundary);
+                boundary = topRight / partial;
+                index |= 1 << 0;
+            }
+
+            if (sampleVal < boundary) {
+                sampleVal /= boundary;
+            } else {
+                childOffset.y = 0.5f;
+                sampleVal = (sampleVal - boundary) / (1.0f - boundary);
+                index |= 1 << 1;
+            }
+
+            if (curr->isLeaf(index)) {
+                Point2f nextSample = sampler.next2D();
+                Point2f res = origin + scale * (childOffset + 0.5f * nextSample);
+                res.x = safe_max(0.0f, safe_min(res.x, 1.0f));
+                res.y = safe_max(0.0f, safe_min(res.y, 1.0f));
+                return res;
+            } else {
+                origin = origin + scale * childOffset;
+                scale *= 0.5f;
+                curr = &m_nodes[curr->child(index)];
+            }
+        }
     }
 
     inline __host__ __device__ int depth() const { return m_maxDepth; }
-    inline __host__ __device__ int depthAt(Point2f p) const { return m_nodes[0].depthAt(p, m_nodes); }
+    inline __host__ __device__ int depthAt(Point2f p) const {
+        p.x = safe_max(0.0f, safe_min(p.x, 1.0f));
+        p.y = safe_max(0.0f, safe_min(p.y, 1.0f));
+        const QuadTreeNode* curr = &m_nodes[0];
+        int d = 1;
+        while (true) {
+            const int index = curr->childIndex(p);
+            if (curr->isLeaf(index)) {
+                return d;
+            } else {
+                d++;
+                curr = &m_nodes[curr->child(index)];
+            }
+        }
+    }
     inline __host__ __device__ size_t numNodes() const { return m_numNodes; }
     inline __host__ __device__ float statisticalWeight() const { return m_statisticalWeight; }
     inline __host__ __device__ void setStatisticalWeight(float val) { m_statisticalWeight = val; }
 
+#ifndef __CUDA_ARCH__
     inline __host__ __device__ void recordIrradiance(Point2f p, float irradiance, float statisticalWeight, EDirectionalFilter directionalFilter) {
         if (safe_isfinite(statisticalWeight) && statisticalWeight > 0.0f) {
             atomic_add_float(&m_statisticalWeight, statisticalWeight);
@@ -374,6 +493,15 @@ struct DTree {
             }
         }
     }
+#endif
+
+#ifndef __CUDA_ARCH__
+    struct StackNode {
+        size_t nodeIndex;
+        size_t otherNodeIndex;
+        const std::vector<QuadTreeNode>* otherNodes;
+        int depth;
+    };
 
     __host__ void reset(const DTree& previousDTree, int newMaxDepth, float subdivisionThreshold) {
         m_sum = 0.0f;
@@ -388,15 +516,8 @@ struct DTree {
             cudaMemcpy(oldHostNodes.data(), previousDTree.m_nodes, previousDTree.m_numNodes * sizeof(QuadTreeNode), cudaMemcpyDeviceToHost);
         }
 
-        struct StackNode {
-            size_t nodeIndex;
-            size_t otherNodeIndex;
-            const std::vector<QuadTreeNode>* otherNodes;
-            int depth;
-        };
-
         std::stack<StackNode> nodeIndices;
-        nodeIndices.push({0, 0, &oldHostNodes, 1});
+        nodeIndices.push(StackNode{0, 0, &oldHostNodes, 1});
 
         const float total = previousDTree.m_sum;
         
@@ -414,9 +535,9 @@ struct DTree {
                     uint32_t targetChildIndex = static_cast<uint32_t>(hostNodes.size());
 
                     if (!otherNode.isLeaf(i)) {
-                        nodeIndices.push({targetChildIndex, otherNode.child(i), &oldHostNodes, sNode.depth + 1});
+                        nodeIndices.push(StackNode{targetChildIndex, otherNode.child(i), &oldHostNodes, sNode.depth + 1});
                     } else {
-                        nodeIndices.push({targetChildIndex, targetChildIndex, &hostNodes, sNode.depth + 1});
+                        nodeIndices.push(StackNode{targetChildIndex, targetChildIndex, &hostNodes, sNode.depth + 1});
                     }
 
                     hostNodes[sNode.nodeIndex].setChild(i, targetChildIndex);
@@ -444,13 +565,13 @@ struct DTree {
 
     size_t approxMemoryFootprint() const { return m_numNodes * sizeof(QuadTreeNode) + sizeof(*this); }
 
-    __host__ void build() {
+    __host__ void build(int distributionMode = 0) {
         if (m_numNodes == 0 || !m_nodes) return;
 
         std::vector<QuadTreeNode> hostNodes(m_numNodes);
         cudaMemcpy(hostNodes.data(), m_nodes, m_numNodes * sizeof(QuadTreeNode), cudaMemcpyDeviceToHost);
 
-        hostNodes[0].build(hostNodes.data());
+        hostNodes[0].build(hostNodes.data(), distributionMode, 1.f);
 
         float overallSum = 0.0f;
         for (int i = 0; i < 4; ++i) { overallSum += hostNodes[0].sum(i); }
@@ -458,16 +579,32 @@ struct DTree {
 
         cudaMemcpy(m_nodes, hostNodes.data(), m_numNodes * sizeof(QuadTreeNode), cudaMemcpyHostToDevice);
     }
+#endif
 };
 
 struct DTreeWrapper {
     DTree building;   
     DTree sampling;   
 
+#ifndef __CUDA_ARCH__
     inline __host__ void clear() {
         building.clear();
         sampling.clear();
     }
+
+    inline DTreeWrapper& operator=(const DTreeWrapper& other) {
+        if (this != &other) {
+            building = other.building;
+            sampling = other.sampling;
+        }
+        return *this;
+    }
+
+    inline DTreeWrapper(const DTreeWrapper& other) {
+        *this = other;
+    }
+    DTreeWrapper() = default;
+#endif
 
     inline static __host__ __device__ Vector3f canonicalToDir(Point2f p) {
         const float cosTheta = 2.f * p.x - 1.f;
@@ -504,6 +641,7 @@ struct DTreeWrapper {
     inline __host__ __device__ float pdf(const Vector3f& dir) const { return sampling.pdf(dirToCanonical(dir)); }
     inline __host__ __device__ float diff(const DTreeWrapper& other) const { return 0.0f; }
 
+#ifndef __CUDA_ARCH__
     inline __host__ __device__ void record(const DTreeRecord& rec, EDirectionalFilter dirFilter) {
         if (rec.isDelta) return;  
         if (!(rec.woPdf > 0.f))  return;
@@ -511,20 +649,26 @@ struct DTreeWrapper {
         const float irradiance = rec.radiance / rec.woPdf;
         building.recordIrradiance(dirToCanonical(rec.d), irradiance, rec.statisticalWeight, dirFilter);
     }
+#endif
 
-    __host__ void build() {
-        building.build();
+#ifndef __CUDA_ARCH__
+    __host__ void build(int distributionMode = 0) {
+        building.build(distributionMode);
+        sampling.clear();
         sampling = building; 
     }
 
     __host__ void reset(int maxDepth, float subdivisionThreshold) { building.reset(sampling, maxDepth, subdivisionThreshold); }
+#endif
     inline __host__ __device__ int depth() const { return sampling.depth(); }
     inline __host__ __device__ size_t numNodes() const { return sampling.numNodes(); }
     inline __host__ __device__ float meanRadiance() const { return sampling.mean(); }
     inline __host__ __device__ float statisticalWeight() const { return sampling.statisticalWeight(); }
     inline __host__ __device__ float statisticalWeightBuilding() const { return building.statisticalWeight(); }
     inline __host__ __device__ void setStatisticalWeightBuilding(float statisticalWeight) { building.setStatisticalWeight(statisticalWeight); }
+#ifndef __CUDA_ARCH__
     size_t approxMemoryFootprint() const { return building.approxMemoryFootprint() + sampling.approxMemoryFootprint(); }
+#endif
     inline __host__ __device__ float bsdfSamplingFraction(float variable) const { return logistic(variable); }
 };
 

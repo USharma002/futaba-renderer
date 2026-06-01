@@ -13,6 +13,7 @@ struct TrainingBuffers {
     Color3f* wi = nullptr;
     Color3f* wo = nullptr;
     Color3f* radiance = nullptr;
+    float* direction_pdf = nullptr;
     float* material_id = nullptr;
     int max_depth = 0;
     int pixel_index = -1;
@@ -43,6 +44,7 @@ public:
     Color3f* getWi() const { return m_dWi; }
     Color3f* getWo() const { return m_dWo; }
     Color3f* getRadiance() const { return m_dRadiance; }
+    float* getDirectionPdf() const { return m_dDirectionPdf; }
     float* getMaterialId() const { return m_dMaterialId; }
 
     // Run visualization kernel to write the selected channel/depth to a PBO
@@ -55,6 +57,7 @@ private:
     Color3f* m_dWi = nullptr;
     Color3f* m_dWo = nullptr;
     Color3f* m_dRadiance = nullptr;
+    float* m_dDirectionPdf = nullptr;
     float* m_dMaterialId = nullptr;
 
     size_t m_allocatedCount = 0;

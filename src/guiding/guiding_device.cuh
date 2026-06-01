@@ -11,28 +11,6 @@
 
 namespace futaba {
 
-// State-free LCG fractional pseudo-sampler maps s2 fields into state jumps
-struct PseudoSampler {
-    float x, y;
-    int state;
-
-    __host__ __device__ PseudoSampler(Point2f s) : x(s.x), y(s.y), state(0) {}
-
-    __host__ __device__ float safe_fracf(float v) const {
-        return v - floorf(v);
-    }
-
-    __host__ __device__ float next1D() {
-        state++;
-        float seed = x * 12.9898f + y * 78.233f + static_cast<float>(state) * 45.164f;
-        return safe_fracf(sinf(seed) * 43758.5453f);
-    }
-
-    __host__ __device__ Point2f next2D() {
-        return Point2f(next1D(), next1D());
-    }
-};
-
 // Lightweight, destructor-free reader block processes layout navigation inside device spaces safely
 struct STreeView {
     STreeNode* m_nodes;
@@ -79,7 +57,7 @@ struct GuidingDistribution {
             // Convert incoming local direction to world space for tree lookup
             Vector3f wo_world = frame.to_world(bs.wo);
             Point2f canonicalDir = DTreeWrapper::dirToCanonical(wo_world);
-            float value = dw->sampling.node(0).eval(canonicalDir, dw->sampling.m_nodes); 
+            float value = dw->sampling.eval(canonicalDir); 
             return Color3f(value / (4.f * 3.14159265358979323846f));
         }
         return Color3f(0.f);
@@ -103,7 +81,8 @@ struct GuidingDistribution {
         return Warp::squareToCosineHemispherePdf(bs.wo);
     }
 
-    __host__ __device__ inline Color3f sample(BSDFSample& bs, const Point2f& s2) const {
+    template <typename SamplerType>
+    __host__ __device__ inline Color3f sample(BSDFSample& bs, SamplerType& sampler) const {
         if (mode == PATH_GUIDING_NONE || !sTreeNodes) {
             bs.pdf = 0.f; return Color3f(0.f);
         }
@@ -114,15 +93,14 @@ struct GuidingDistribution {
             DTreeWrapper* dw = view.dTreeWrapper(p); 
             
             if (!dw || dw->meanRadiance() <= 0.f) {
-                bs.wo = Warp::squareToCosineHemisphere(s2);
+                bs.wo = Warp::squareToCosineHemisphere(sampler.next2D());
                 bs.pdf = Warp::squareToCosineHemispherePdf(bs.wo);
                 bs.weight = Color3f(1.f);
                 bs.sampled_type = BSDF_ID_DIFFUSE;
                 return bs.weight;
             }
 
-            PseudoSampler pseudoSampler(s2);
-            Point2f canonicalSample = dw->sampling.sample(pseudoSampler); 
+            Point2f canonicalSample = dw->sampling.sample(sampler); 
             Vector3f wo_world = DTreeWrapper::canonicalToDir(canonicalSample); 
             
             // Map the sampled world space vector back into local space for the material shaders
@@ -130,8 +108,9 @@ struct GuidingDistribution {
             bs.pdf = dw->pdf(wo_world); 
             
             if (bs.pdf <= 0.f || Frame::cos_theta(bs.wo) <= 0.f) {
-                bs.wo = Warp::squareToCosineHemisphere(s2);
-                bs.pdf = Warp::squareToCosineHemispherePdf(bs.wo);
+                bs.pdf = 0.f;
+                bs.weight = Color3f(0.f);
+                return bs.weight;
             }
 
             bs.weight = Color3f(1.f);

@@ -40,12 +40,16 @@ struct STreeNode {
 
     inline __host__ __device__ int nodeIndex(Point3f& p) const { return children[childIndex(p)]; }
     inline __host__ __device__ DTreeWrapper* dTreeWrapper(Point3f& p, Vector3f& size, STreeNode* nodes) {
-        if (isLeaf) return &dTree;
-        size[axis] *= 0.5f;
-        return nodes[nodeIndex(p)].dTreeWrapper(p, size, nodes);
+        STreeNode* curr = this;
+        while (!curr->isLeaf) {
+            size[curr->axis] *= 0.5f;
+            curr = &nodes[curr->nodeIndex(p)];
+        }
+        return &curr->dTree;
     }
 
     inline __host__ __device__ const DTreeWrapper* dTreeWrapper() const { return &dTree; }
+#ifndef __CUDA_ARCH__
     inline __host__ __device__ int depth(Point3f p, const STreeNode* nodes) const {
         if (isLeaf) return 1;
         return 1 + nodes[nodeIndex(p)].depth(p, nodes);
@@ -55,7 +59,9 @@ struct STreeNode {
         if (isLeaf) return 1;
         return 1 + safe_max(nodes[children[0]].depth(nodes), nodes[children[1]].depth(nodes));
     }
+#endif
 
+#ifndef __CUDA_ARCH__
     inline __host__ void forEachLeaf(
         std::function<void(const DTreeWrapper*, const Point3f&, const Vector3f&)> func,
         Point3f p, Vector3f size, const STreeNode* nodes) const {
@@ -70,6 +76,7 @@ struct STreeNode {
             }
         }
     }
+#endif
 
     inline __host__ __device__ static float computeOverlappingVolume(const Point3f& min1, const Point3f& max1,
                                                                      const Point3f& min2, const Point3f& max2) {
@@ -79,6 +86,7 @@ struct STreeNode {
         return v;
     }
 
+#ifndef __CUDA_ARCH__
     inline __host__ __device__ void record(const Point3f& min1, const Point3f& max1,
                                            Point3f min2, Vector3f size2,
                                            const DTreeRecord& rec,
@@ -100,6 +108,7 @@ struct STreeNode {
             }
         }
     }
+#endif
 };
 
 struct STree {
@@ -110,6 +119,7 @@ struct STree {
     // Added explicit dual-space viewing constructor to solve stack allocation issues
     inline __host__ __device__ STree() : m_nodes(nullptr), m_numNodes(0) {}
 
+#ifndef __CUDA_ARCH__
     __host__ void initialize() {
         m_numNodes = 1;
         std::vector<STreeNode> rootNode(1);
@@ -157,6 +167,7 @@ struct STree {
     }
 
     __host__ STree(const STree& other) : m_nodes(nullptr), m_numNodes(0) { *this = other; }
+#endif
 
     inline __host__ __device__ DTreeWrapper* dTreeWrapper(Point3f p, Vector3f& size) {
         size = Vector3f(m_aabb.maxP.x - m_aabb.minP.x, m_aabb.maxP.y - m_aabb.minP.y, m_aabb.maxP.z - m_aabb.minP.z);
@@ -168,6 +179,7 @@ struct STree {
 
     inline __host__ __device__ DTreeWrapper* dTreeWrapper(Point3f p) { Vector3f size; return dTreeWrapper(p, size); }
 
+#ifndef __CUDA_ARCH__
     inline __host__ __device__ void record(const Point3f& p, const DTreeRecord& rec, EDirectionalFilter dirFilter) {
         DTreeWrapper* dw = dTreeWrapper(p);
         if (dw) dw->record(rec, dirFilter);
@@ -186,7 +198,9 @@ struct STree {
             Point3f(p.x + half.x, p.y + half.y, p.z + half.z),
             m_aabb.minP, extents, rec, dirFilter, m_nodes);
     }
+#endif
 
+#ifndef __CUDA_ARCH__
     __host__ void forEachDTreeWrapperConst(std::function<void(const DTreeWrapper*)> func) const {
         std::vector<STreeNode> hostNodes(m_numNodes);
         if (m_numNodes > 0 && m_nodes != nullptr) { cudaMemcpy(hostNodes.data(), m_nodes, m_numNodes * sizeof(STreeNode), cudaMemcpyDeviceToHost); }
@@ -289,10 +303,12 @@ struct STree {
             cudaMemcpy(m_nodes, hostNodes.data(), m_numNodes * sizeof(STreeNode), cudaMemcpyHostToDevice);
         }
     }
+#endif
 
     inline __host__ __device__ const AABB& aabb() const { return m_aabb; }
     inline __host__ __device__ size_t numNodes() const { return m_numNodes; }
 
+#ifndef __CUDA_ARCH__
     __host__ size_t numLeaves() const {
         std::vector<STreeNode> hostNodes(m_numNodes);
         if (m_numNodes > 0 && m_nodes != nullptr) { cudaMemcpy(hostNodes.data(), m_nodes, m_numNodes * sizeof(STreeNode), cudaMemcpyDeviceToHost); }
@@ -360,6 +376,7 @@ struct STree {
             leavesCount, minDepth, avgDepth, maxDepth, minRad, avgRad, maxRad,
             (cntN > 0 ? minN : 0), avgN, (cntN > 0 ? maxN : 0), (cnt > 0 ? minW : 0.f), avgW, maxW);
     }
+#endif
 };
 
 } // namespace futaba

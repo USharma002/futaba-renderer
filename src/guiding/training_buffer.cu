@@ -102,6 +102,7 @@ void TrainingBufferManager::allocate(int width, int height, int maxDepth) {
     cudaMalloc(reinterpret_cast<void **>(&m_dWi), m_allocatedCount * sizeof(Color3f));
     cudaMalloc(reinterpret_cast<void **>(&m_dWo), m_allocatedCount * sizeof(Color3f));
     cudaMalloc(reinterpret_cast<void **>(&m_dRadiance), m_allocatedCount * sizeof(Color3f));
+    cudaMalloc(reinterpret_cast<void **>(&m_dDirectionPdf), m_allocatedCount * sizeof(float));
     cudaMalloc(reinterpret_cast<void **>(&m_dMaterialId), m_allocatedCount * sizeof(float));
 
     clear();
@@ -116,6 +117,7 @@ void TrainingBufferManager::clear() {
     cudaMemset(m_dWi, 0, m_allocatedCount * sizeof(Color3f));
     cudaMemset(m_dWo, 0, m_allocatedCount * sizeof(Color3f));
     cudaMemset(m_dRadiance, 0, m_allocatedCount * sizeof(Color3f));
+    cudaMemset(m_dDirectionPdf, 0, m_allocatedCount * sizeof(float));
     cudaMemset(m_dMaterialId, 0, m_allocatedCount * sizeof(float));
 }
 
@@ -126,6 +128,7 @@ void TrainingBufferManager::freeBuffers() {
     if (m_dWi) { cudaFree(m_dWi); m_dWi = nullptr; }
     if (m_dWo) { cudaFree(m_dWo); m_dWo = nullptr; }
     if (m_dRadiance) { cudaFree(m_dRadiance); m_dRadiance = nullptr; }
+    if (m_dDirectionPdf) { cudaFree(m_dDirectionPdf); m_dDirectionPdf = nullptr; }
     if (m_dMaterialId) { cudaFree(m_dMaterialId); m_dMaterialId = nullptr; }
 
     m_allocatedCount = 0;
@@ -190,6 +193,14 @@ void TrainingBufferManager::save(const std::string& basePath, int width, int hei
     }
 
     // 7. Material ID
+    if (m_dDirectionPdf) {
+        std::vector<float> host(count);
+        cudaMemcpy(host.data(), m_dDirectionPdf, count * sizeof(float), cudaMemcpyDeviceToHost);
+        std::ofstream out(prefix + "_direction_pdf.bin", std::ios::binary);
+        out.write(reinterpret_cast<const char*>(host.data()), count * sizeof(float));
+    }
+
+    // 8. Material ID
     if (m_dMaterialId) {
         std::vector<float> host(count);
         cudaMemcpy(host.data(), m_dMaterialId, count * sizeof(float), cudaMemcpyDeviceToHost);
@@ -208,6 +219,7 @@ void TrainingBufferManager::save(const std::string& basePath, int width, int hei
     meta << "channels_wi: 3\n";
     meta << "channels_wo: 3\n";
     meta << "channels_radiance: 3\n";
+    meta << "channels_direction_pdf: 1\n";
     meta << "channels_material_id: 1\n";
     meta.close();
 

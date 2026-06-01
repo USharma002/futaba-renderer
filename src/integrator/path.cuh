@@ -50,7 +50,11 @@ struct Path {
     // Evaluate NEE direct-lighting contribution at a smooth surface vertex.
     HD Color3f nee_contribution(const Scene& scene,
                                 const SurfaceIntersection& si,
-                                Sampler& sampler) const
+                                Sampler& sampler,
+                                int guiding_mode = 0,
+                                STreeNode* sTreeNodes = nullptr,
+                                const AABB& sTreeAABB = AABB(),
+                                float bsdf_sampling_fraction = 0.5f) const
     {
         // Sample a point on emitter
         EmitterSample es;
@@ -72,6 +76,16 @@ struct Path {
         Color3f f_bsdf; float pdf_bsdf;
         si.eval_pdf_bsdf(wo_local, f_bsdf, pdf_bsdf);
 
+        float scatterPdf = pdf_bsdf;
+        if (guiding_mode == PATH_GUIDING_PPG && sTreeNodes != nullptr && !si.is_bsdf_delta() && si.mat_type != BSDF_ID_NULL) {
+            GuidingDistribution guiding(guiding_mode, si, sTreeNodes, sTreeAABB);
+            BSDFSample temp_bs;
+            temp_bs.wo = wo_local;
+            float dTreePdf = guiding.pdf(temp_bs);
+            const float alpha = bsdf_sampling_fraction;
+            scatterPdf = alpha * pdf_bsdf + (1.f - alpha) * dTreePdf;
+        }
+
         // Early exit if the BSDF evaluates to zero (avoid tracing shadow ray)
         if (f_bsdf.x <= 0.f && f_bsdf.y <= 0.f && f_bsdf.z <= 0.f)
             return Color3f(0.f);
@@ -81,7 +95,7 @@ struct Path {
             return Color3f(0.f);
 
         // MIS weight: if the BSDF is delta, we have no choice but to take the emitter sample
-        const float w = es.delta ? 1.f : mis_weight(es.pdf, pdf_bsdf);
+        const float w = es.delta ? 1.f : mis_weight(es.pdf, scatterPdf);
         return f_bsdf * (cos_s / es.pdf) * es.Le * w;
     }
 
@@ -121,8 +135,8 @@ struct Path {
                     denoise_albedo_buffer[pixel_index] += alb;
                     denoise_normal_buffer[pixel_index] += norm;
                 }
-    }
-    }
+            }
+        }
     }
 
     // Record training features dynamically based on guiding mode.
@@ -136,7 +150,9 @@ struct Path {
                 tb.active[buf_idx] = 1.0f;
 
                 if (hit) {
-                    if (guiding_mode == PATH_GUIDING_PPG || guiding_mode == PATH_GUIDING_NPM) {
+                    if (guiding_mode == PATH_GUIDING_PPG && (si.is_bsdf_delta() || si.mat_type == BSDF_ID_NULL)) {
+                        tb.active[buf_idx] = 0.0f;
+                    } else if (guiding_mode == PATH_GUIDING_PPG || guiding_mode == PATH_GUIDING_NPM) {
                         if (tb.position) tb.position[buf_idx] = si.p;
                     }
                     if (guiding_mode == PATH_GUIDING_NPM) {
@@ -157,24 +173,56 @@ struct Path {
     // Propagate radiance backward along the path.
     template<bool RecordTraining>
     HD void backward_propagate_radiance(int final_depth, const TrainingBuffers& tb, bool record_training, int guiding_mode,
-                                        const Color3f* local_Le, const Color3f* local_nee, const Color3f* local_bsdf) const
+                                        const Color3f* local_Le, const Color3f* local_nee,
+                                        const Color3f* local_bsdf, const float* local_pdf,
+                                        const float* local_dTreePdf, int ppg_distribution_mode) const
     {
         if constexpr (RecordTraining) {
             if (record_training && tb.radiance && (guiding_mode == PATH_GUIDING_PPG || guiding_mode == PATH_GUIDING_NPM)) {
-                Color3f incoming = Color3f(0.f);
+                Color3f incident = Color3f(0.f);
                 constexpr int MAX_LOCAL_DEPTH = 16;
                 int start_depth = (final_depth < MAX_LOCAL_DEPTH) ? final_depth - 1 : MAX_LOCAL_DEPTH - 1;
                 for (int d = start_depth; d >= 0; --d) {
+                    Color3f outgoing = local_Le[d] + local_nee[d] + local_bsdf[d] * incident;
                     if (d < tb.max_depth) {
                         int buf_idx = d * tb.img_size + tb.pixel_index;
                         if (tb.active[buf_idx] > 0.5f) {
-                            incoming = local_Le[d] + local_nee[d] + local_bsdf[d] * incoming;
-                            tb.radiance[buf_idx] = incoming;
+                            if (guiding_mode == PATH_GUIDING_PPG) {
+                                if (ppg_distribution_mode == 3) {
+                                    tb.radiance[buf_idx] = outgoing;
+                                } else {
+                                    float val = 0.f;
+                                    if (ppg_distribution_mode == 0) { // Radiance
+                                        val = (outgoing.x + outgoing.y + outgoing.z) / 3.f;
+                                    } else { // Product
+                                        Color3f prod = outgoing * local_bsdf[d];
+                                        float prod_val = (prod.x + prod.y + prod.z) / 3.f;
+                                        if (local_pdf[d] > 0.f) {
+                                            float mis_weight = local_dTreePdf[d] / local_pdf[d];
+                                            prod_val *= mis_weight;
+                                        }
+                                        if (ppg_distribution_mode == 2) { // Product L2
+                                            val = prod_val * prod_val;
+                                        } else { // Product L1
+                                            val = prod_val;
+                                        }
+                                    }
+                                    tb.radiance[buf_idx] = Color3f(val);
+                                }
+                            } else {
+                                tb.radiance[buf_idx] = outgoing;
+                            }
+                            if (tb.direction_pdf) {
+                                tb.direction_pdf[buf_idx] = local_pdf[d];
+                            }
                         } else {
-                            incoming = Color3f(0.f);
                             tb.radiance[buf_idx] = Color3f(0.f);
+                            if (tb.direction_pdf) {
+                                tb.direction_pdf[buf_idx] = 0.f;
+                            }
                         }
                     }
+                    incident = outgoing;
                 }
             }
         }
@@ -188,7 +236,11 @@ struct Path {
                       int pixel_index = -1,
                       int sample_count = 1,
                       const PerspectiveCamera* camera = nullptr,
-                      int guiding_mode = 0) const
+                      int guiding_mode = 0,
+                      STreeNode* sTreeNodes = nullptr,
+                      const AABB& sTreeAABB = AABB(),
+                      float bsdf_sampling_fraction = 0.5f,
+                      int ppg_distribution_mode = 0) const
     {
         Color3f L(0.f), beta(1.f);
         float   eta = 1.f;
@@ -211,11 +263,12 @@ struct Path {
         }
 
         // Local register arrays for backward radiance propagation.
-        // Only allocated when training is active to avoid register spill.
         constexpr int MAX_LOCAL_DEPTH = RecordTraining ? 16 : 1;
         Color3f local_Le[MAX_LOCAL_DEPTH];
         Color3f local_nee[MAX_LOCAL_DEPTH];
         Color3f local_bsdf[MAX_LOCAL_DEPTH];
+        float   local_pdf[MAX_LOCAL_DEPTH];
+        float   local_dTreePdf[MAX_LOCAL_DEPTH];
 
         if constexpr (RecordTraining) {
             if (record_training) {
@@ -223,6 +276,8 @@ struct Path {
                     local_Le[i] = Color3f(0.f);
                     local_nee[i] = Color3f(0.f);
                     local_bsdf[i] = Color3f(0.f);
+                    local_pdf[i] = 0.f;
+                    local_dTreePdf[i] = 0.f;
                 }
             }
         }
@@ -278,7 +333,7 @@ struct Path {
             // NEE direct lighting
             Color3f nee_val(0.f);
             if (scene.use_nee && !si.is_bsdf_delta()) {
-                nee_val = nee_contribution(scene, si, sampler);
+                nee_val = nee_contribution(scene, si, sampler, guiding_mode, sTreeNodes, sTreeAABB, bsdf_sampling_fraction);
                 L += beta * nee_val;
             }
             if constexpr (RecordTraining) {
@@ -289,21 +344,77 @@ struct Path {
 
             // BSDF sample
             BSDFSample bs;
-            const Color3f bsdf_w = si.sample_bsdf(bs, sampler.next2D());
-            if (!bs.is_valid()) break;
+            Color3f bsdf_w(0.f);
+
+            if (guiding_mode == PATH_GUIDING_PPG && sTreeNodes != nullptr && !si.is_bsdf_delta() && si.mat_type != BSDF_ID_NULL) {
+                GuidingDistribution guiding(guiding_mode, si, sTreeNodes, sTreeAABB);
+                const float alpha = bsdf_sampling_fraction;
+                
+                if (sampler.next1D() < alpha) {
+                    // Sample BSDF
+                    bsdf_w = si.sample_bsdf(bs, sampler.next2D());
+                    if (bs.is_valid()) {
+                        float dTreePdf = guiding.pdf(bs);
+                        float mixed_pdf = alpha * bs.pdf + (1.f - alpha) * dTreePdf;
+                        if (mixed_pdf > 0.f) {
+                            bsdf_w = bsdf_w * (bs.pdf / mixed_pdf);
+                            if (RecordTraining && record_training && depth < MAX_LOCAL_DEPTH) {
+                                local_dTreePdf[depth] = dTreePdf;
+                            }
+                            bs.pdf = mixed_pdf;
+                        } else {
+                            bs.pdf = 0.f;
+                        }
+                    }
+                } else {
+                    // Sample DTree
+                    guiding.sample(bs, sampler);
+                    if (bs.is_valid()) {
+                        Color3f f_bsdf;
+                        float bsdfPdf = 0.f;
+                        si.eval_pdf_bsdf(bs.wo, f_bsdf, bsdfPdf);
+                        
+                        float mixed_pdf = alpha * bsdfPdf + (1.f - alpha) * bs.pdf;
+                        if (mixed_pdf > 0.f) {
+                            float cos_theta = Frame::abs_cos_theta(bs.wo);
+                            bsdf_w = f_bsdf * (cos_theta / mixed_pdf);
+                            if (RecordTraining && record_training && depth < MAX_LOCAL_DEPTH) {
+                                local_dTreePdf[depth] = bs.pdf;
+                            }
+                            bs.pdf = mixed_pdf;
+                        } else {
+                            bs.pdf = 0.f;
+                        }
+                    }
+                }
+            } else {
+                bsdf_w = si.sample_bsdf(bs, sampler.next2D());
+            }
+
+            if (!bs.is_valid()) {
+                if constexpr (RecordTraining) {
+                    if (record_training && depth < tb.max_depth) {
+                        int buf_idx = depth * tb.img_size + tb.pixel_index;
+                        tb.active[buf_idx] = 0.0f;
+                    }
+                }
+                break;
+            }
 
             // Record bsdf weight and wo direction
             if constexpr (RecordTraining) {
                 if (record_training && depth < MAX_LOCAL_DEPTH) {
                     local_bsdf[depth] = bsdf_w * bs.pdf;
+                    local_pdf[depth] = bs.pdf;
                 }
                 if (record_training && depth < tb.max_depth && tb.wo) {
                     if (guiding_mode == PATH_GUIDING_PPG || guiding_mode == PATH_GUIDING_NPM) {
                         int buf_idx = depth * tb.img_size + tb.pixel_index;
-                        tb.wo[buf_idx] = bs.wo;
+                        tb.wo[buf_idx] = (guiding_mode == PATH_GUIDING_PPG) ? si.to_world(bs.wo) : bs.wo;
                     }
                 }
             }
+            
 
             beta *= bsdf_w;
             eta  *= bs.eta;
@@ -319,6 +430,13 @@ struct Path {
             }
 
             // Advance
+            if constexpr (RecordTraining) {
+                if (record_training && depth < tb.max_depth && tb.wi && guiding_mode == PATH_GUIDING_PPG) {
+                    int buf_idx = depth * tb.img_size + tb.pixel_index;
+                    tb.wi[buf_idx] = beta;
+                }
+            }
+
             prev_p          = si.p;
             prev_bsdf_pdf   = bs.pdf;
             prev_bsdf_delta = si.is_bsdf_delta();
@@ -326,8 +444,10 @@ struct Path {
         }
 
         // Backward propagation of radiance from local register arrays
-        backward_propagate_radiance<RecordTraining>(final_depth, tb, record_training, guiding_mode, local_Le, local_nee, local_bsdf);
-
+        backward_propagate_radiance<RecordTraining>(final_depth, tb, record_training, guiding_mode,
+                                                    local_Le, local_nee, local_bsdf, local_pdf,
+                                                    local_dTreePdf, ppg_distribution_mode);
+                                                    
         return L;
     }
 };
@@ -335,3 +455,18 @@ struct Path {
 using PathIntegrator = Path;
 
 } // namespace futaba
+
+
+#if !defined(__CUDACC__) && defined(NANOGUI_GLAD)
+#include "integrator_ui.h"
+
+namespace futaba {
+
+class PathIntegratorUI : public IntegratorUI {
+public:
+    std::string getName() const override { return "Path"; }
+    int getMode() const override { return INTEGRATOR_PATH; }
+};
+
+} // namespace futaba
+#endif
