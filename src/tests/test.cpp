@@ -279,6 +279,19 @@ void printStructSize(){
     print_type<LaunchParams>("LaunchParams");
     print_type<QuadTreeNode>("QuadTreeNode");
     print_type<DTree>("DTree");
+
+    std::cout << "\nMaterial offsets:\n";
+    std::cout << "  albedo:       " << offsetof(Material, albedo) << "\n";
+    std::cout << "  specular:     " << offsetof(Material, specular) << "\n";
+    std::cout << "  emission:     " << offsetof(Material, emission) << "\n";
+    std::cout << "  conductorEta: " << offsetof(Material, conductorEta) << "\n";
+    std::cout << "  conductorK:   " << offsetof(Material, conductorK) << "\n";
+    std::cout << "  alpha:        " << offsetof(Material, alpha) << "\n";
+    std::cout << "  extIOR:       " << offsetof(Material, extIOR) << "\n";
+    std::cout << "  intIOR:       " << offsetof(Material, intIOR) << "\n";
+    std::cout << "  isConductor:  " << offsetof(Material, isConductor) << "\n";
+    std::cout << "  type:         " << offsetof(Material, type) << "\n";
+    std::cout << "  texObj:       " << offsetof(Material, texObj) << "\n";
 }
 
 int main(int argc, char** argv) {

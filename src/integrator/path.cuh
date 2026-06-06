@@ -1,6 +1,7 @@
 #pragma once
 
 #include "bsdf_sample.cuh"
+#include "bsdf.cuh"
 #include "emitter_sampler.cuh"
 #include "sampler.cuh"
 #include "scene.cuh"
@@ -72,12 +73,14 @@ struct Path {
         const float cos_s = wo_local.z;
         if (cos_s <= 0.f) return Color3f(0.f);
 
+        const Material& mat = scene.materials[si.material_id];
+
         // Evaluate BSDF and its PDF for the sampled emitter direction
         Color3f f_bsdf; float pdf_bsdf;
-        si.eval_pdf_bsdf(wo_local, f_bsdf, pdf_bsdf);
+        BSDF::eval_pdf(mat, si, wo_local, f_bsdf, pdf_bsdf);
 
         float scatterPdf = pdf_bsdf;
-        if (guiding_mode == PATH_GUIDING_PPG && sTreeNodes != nullptr && !si.is_bsdf_delta() && si.mat_type != BSDF_ID_NULL) {
+        if (guiding_mode == PATH_GUIDING_PPG && sTreeNodes != nullptr && !BSDF::is_delta(mat.type) && mat.type != BSDF_ID_NULL) {
             GuidingDistribution guiding(guiding_mode, si, sTreeNodes, sTreeAABB);
             BSDFSample temp_bs;
             temp_bs.wo = wo_local;
@@ -119,7 +122,8 @@ struct Path {
                 Color3f alb(0.f);
                 Vector3f norm(0.f);
                 if (hit) {
-                    alb = si.albedo;
+                    const Material& mat = scene.materials[si.material_id];
+                    alb = BSDF::get_albedo(mat, si);
                     if (camera) {
                         norm = Vector3f(dot(si.n, camera->right),
                                         dot(si.n, camera->trueUp),
@@ -142,7 +146,8 @@ struct Path {
     // Record training features dynamically based on guiding mode.
     template<bool RecordTraining>
     HD void record_training_features(const SurfaceIntersection& si, bool hit, int depth, const Ray& current_ray,
-                                     const TrainingBuffers& tb, bool record_training, int guiding_mode) const
+                                     const TrainingBuffers& tb, bool record_training, int guiding_mode,
+                                     const Material* materials) const
     {
         if constexpr (RecordTraining) {
             if (record_training && depth < tb.max_depth) {
@@ -150,7 +155,8 @@ struct Path {
                 tb.active[buf_idx] = 1.0f;
 
                 if (hit) {
-                    if (guiding_mode == PATH_GUIDING_PPG && (si.is_bsdf_delta() || si.mat_type == BSDF_ID_NULL)) {
+                    const Material& mat = materials[si.material_id];
+                    if (guiding_mode == PATH_GUIDING_PPG && (BSDF::is_delta(mat.type) || mat.type == BSDF_ID_NULL)) {
                         tb.active[buf_idx] = 0.0f;
                     } else if (guiding_mode == PATH_GUIDING_PPG || guiding_mode == PATH_GUIDING_NPM) {
                         if (tb.position) tb.position[buf_idx] = si.p;
@@ -297,7 +303,7 @@ struct Path {
                                                        pixel_index, sample_count, camera, scene);
 
             // Record training features for this bounce
-            record_training_features<RecordTraining>(si, hit, depth, current_ray, tb, record_training, guiding_mode);
+            record_training_features<RecordTraining>(si, hit, depth, current_ray, tb, record_training, guiding_mode, scene.materials);
 
             if (!hit) {
                 // Environment emission
@@ -319,6 +325,8 @@ struct Path {
                 break;
             }
 
+            const Material& mat = scene.materials[si.material_id];
+
             // Emission at current vertex (MIS against light PDF)
             Color3f emission = emission_weight(scene, si, prev_p,
                                                prev_bsdf_pdf, prev_bsdf_delta);
@@ -332,7 +340,7 @@ struct Path {
 
             // NEE direct lighting
             Color3f nee_val(0.f);
-            if (scene.use_nee && !si.is_bsdf_delta()) {
+            if (scene.use_nee && !BSDF::is_delta(mat.type)) {
                 nee_val = nee_contribution(scene, si, sampler, guiding_mode, sTreeNodes, sTreeAABB, bsdf_sampling_fraction);
                 L += beta * nee_val;
             }
@@ -346,13 +354,13 @@ struct Path {
             BSDFSample bs;
             Color3f bsdf_w(0.f);
 
-            if (guiding_mode == PATH_GUIDING_PPG && sTreeNodes != nullptr && !si.is_bsdf_delta() && si.mat_type != BSDF_ID_NULL) {
+            if (guiding_mode == PATH_GUIDING_PPG && sTreeNodes != nullptr && !BSDF::is_delta(mat.type) && mat.type != BSDF_ID_NULL) {
                 GuidingDistribution guiding(guiding_mode, si, sTreeNodes, sTreeAABB);
                 const float alpha = bsdf_sampling_fraction;
                 
                 if (sampler.next1D() < alpha) {
                     // Sample BSDF
-                    bsdf_w = si.sample_bsdf(bs, sampler.next2D());
+                    bsdf_w = BSDF::sample(mat, si, bs, sampler.next2D());
                     if (bs.is_valid()) {
                         float dTreePdf = guiding.pdf(bs);
                         float mixed_pdf = alpha * bs.pdf + (1.f - alpha) * dTreePdf;
@@ -372,7 +380,7 @@ struct Path {
                     if (bs.is_valid()) {
                         Color3f f_bsdf;
                         float bsdfPdf = 0.f;
-                        si.eval_pdf_bsdf(bs.wo, f_bsdf, bsdfPdf);
+                        BSDF::eval_pdf(mat, si, bs.wo, f_bsdf, bsdfPdf);
                         
                         float mixed_pdf = alpha * bsdfPdf + (1.f - alpha) * bs.pdf;
                         if (mixed_pdf > 0.f) {
@@ -388,7 +396,7 @@ struct Path {
                     }
                 }
             } else {
-                bsdf_w = si.sample_bsdf(bs, sampler.next2D());
+                bsdf_w = BSDF::sample(mat, si, bs, sampler.next2D());
             }
 
             if (!bs.is_valid()) {
@@ -439,7 +447,7 @@ struct Path {
 
             prev_p          = si.p;
             prev_bsdf_pdf   = bs.pdf;
-            prev_bsdf_delta = si.is_bsdf_delta();
+            prev_bsdf_delta = BSDF::is_delta(mat.type);
             current_ray     = si.spawn_ray(si.to_world(bs.wo));
         }
 

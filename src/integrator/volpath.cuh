@@ -5,6 +5,7 @@
 #include "scene.cuh"
 #include "surface_interaction.cuh"
 #include "emitter_sampler.cuh"
+#include "bsdf.cuh"
 #include <cmath>
 
 namespace futaba {
@@ -103,7 +104,7 @@ struct VolumetricPath {
                 }
             }
 
-            if (hit && si.mat_type == BSDF_ID_NULL) {
+            if (hit && scene.materials[si.material_id].type == BSDF_ID_NULL) {
                 inside_medium = !inside_medium;
                 current_ray = si.spawn_ray(current_ray.d);
                 prev_bsdf_delta = true;
@@ -124,6 +125,8 @@ struct VolumetricPath {
                 break;
             }
 
+            const Material& mat = scene.materials[si.material_id];
+
             Color3f emission = scene.eval_surface_emission(si);
             if (emission.x > 0.f || emission.y > 0.f || emission.z > 0.f) {
                 float w = 1.f;
@@ -136,7 +139,7 @@ struct VolumetricPath {
                 L += beta * w * emission;
             }
 
-            if (scene.use_nee && !si.is_bsdf_delta()) {
+            if (scene.use_nee && !BSDF::is_delta(mat.type)) {
                 EmitterSample es;
                 Point3f u3(sampler.next1D(), sampler.next1D(), sampler.next1D());
                 if (emitter_sampler.sample(scene, si, u3, es) && es.pdf > 0.f) {
@@ -145,7 +148,7 @@ struct VolumetricPath {
                         const float cos_s = wo_local.z;
                         if (cos_s > 0.f) {
                             Color3f f_bsdf; float pdf_bsdf;
-                            si.eval_pdf_bsdf(wo_local, f_bsdf, pdf_bsdf);
+                            BSDF::eval_pdf(mat, si, wo_local, f_bsdf, pdf_bsdf);
                             if (f_bsdf.x > 0.f || f_bsdf.y > 0.f || f_bsdf.z > 0.f) {
                                 Ray shadow = si.spawn_ray(es.d);
                                 float t_max = es.dist - 1e-4f;
@@ -165,7 +168,7 @@ struct VolumetricPath {
             }
 
             BSDFSample bs;
-            Color3f f_bsdf = si.sample_bsdf(bs, sampler.next2D());
+            Color3f f_bsdf = BSDF::sample(mat, si, bs, sampler.next2D());
             if (f_bsdf.x <= 0.f && f_bsdf.y <= 0.f && f_bsdf.z <= 0.f) break;
             if (!bs.is_valid()) break;
 
@@ -174,7 +177,7 @@ struct VolumetricPath {
             beta *= f_bsdf;
             prev_p = si.p;
             prev_bsdf_pdf = bs.pdf;
-            prev_bsdf_delta = si.is_bsdf_delta();
+            prev_bsdf_delta = BSDF::is_delta(mat.type);
 
             float beta_max = fmaxf(beta.x, fmaxf(beta.y, beta.z));
             if (beta_max <= 0.f) break;
@@ -205,4 +208,3 @@ public:
 
 } // namespace futaba
 #endif
-

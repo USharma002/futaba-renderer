@@ -1,4 +1,5 @@
-#include "common.cuh" // Touch to trigger PTX rebuild 2
+#include "common.cuh" // Touch to trigger PTX rebuild 4
+#include "bsdf.cuh"
 #include "heatmap.cuh"
 #include "albedo.cuh"
 #include "phong.cuh"
@@ -47,7 +48,7 @@ static __device__ void accumulate_and_write(int index, const Ray3f& ray, const C
     Color3f alb(0.f);
     Vector3f norm(0.f);
     if (params.scene.intersect(ray, ray.mint, ray.maxt, si)) {
-      alb = si.albedo;
+      alb = BSDF::get_albedo(params.scene.materials[si.material_id], si);
       norm = Vector3f(dot(si.n, params.camera.right),
                       dot(si.n, params.camera.trueUp),
                       dot(si.n, params.camera.forward));
@@ -79,6 +80,8 @@ static __device__ void accumulate_and_write(int index, const Ray3f& ray, const C
 
 extern "C" __global__ void __raygen__render() {
   uint3 idx = optixGetLaunchIndex();
+
+
 
   if (idx.x >= params.width || idx.y >= params.height)
     return;
@@ -243,7 +246,7 @@ extern "C" __global__ void __anyhit__shadow() {
 
   if (tri.material_id >= 0 && tri.material_id < (int)params.scene.materialCount) {
     int mat_type = params.scene.materials[tri.material_id].type;
-    if (mat_type == BSDF_ID_NULL) {
+    if (mat_type == BSDF_ID_NULL || mat_type == BSDF_ID_THINDIELECTRIC) {
       optixIgnoreIntersection();
     }
   }

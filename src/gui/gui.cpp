@@ -114,6 +114,7 @@ static float fromUnitRange(float t, float minVal, float maxVal) {
 
 FutabaScreen::FutabaScreen(int width, int height)
         : Screen(nanogui::Vector2i(width, height), "Futaba Renderer") {
+    cudaSetDevice(0);
     // Initialize render size from framebuffer
     glfwGetFramebufferSize(glfwWindow(), &m_renderWidth, &m_renderHeight);
 
@@ -1272,6 +1273,7 @@ static cudaTextureObject_t createCudaTexture(const std::string& filename,
     texDesc.filterMode = cudaFilterModeLinear;
     texDesc.readMode = cudaReadModeNormalizedFloat;
     texDesc.normalizedCoords = 1;
+    texDesc.sRGB = 1; // Convert sRGB texture data to linear space on read
 
     cudaTextureObject_t texObj = 0;
     err = cudaCreateTextureObject(&texObj, &resDesc, &texDesc, NULL);

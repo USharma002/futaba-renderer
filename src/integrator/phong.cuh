@@ -6,6 +6,7 @@
 #include "sampler.cuh"
 #include "scene.cuh"
 #include "surface_interaction.cuh"
+#include "bsdf.cuh"
 
 
 namespace futaba {
@@ -30,6 +31,8 @@ struct Phong {
       return Color3f(0.0f);
     }
 
+    const Material& mat = scene.materials[si.material_id];
+
     Vector3f n = normalize(si.n);
     if (dot(ray.d, n) > 0.0f)
       n = -n;
@@ -42,10 +45,10 @@ struct Phong {
     const Vector3f reflectDir = 2.0f * dot(n, lightDir) * n - lightDir;
     const float rdotv = fmaxf(dot(normalize(reflectDir), viewDir), 0.0f);
 
-    Color3f diffuse  = si.albedo * (ambientStrength + diffuseStrength * ndotl);
-    Color3f specular = si.specular * (specularStrength * powf(rdotv, shininess));
+    Color3f diffuse  = BSDF::get_albedo(mat, si) * (ambientStrength + diffuseStrength * ndotl);
+    Color3f specular = mat.specular * (specularStrength * powf(rdotv, shininess));
 
-    return (diffuse + specular) * lightColor + si.emission;
+    return (diffuse + specular) * lightColor + mat.emission;
   }
 };
 
@@ -116,4 +119,3 @@ private:
 
 } // namespace futaba
 #endif
-

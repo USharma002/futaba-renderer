@@ -3,6 +3,7 @@
 #include "sampler.cuh"
 #include "scene.cuh"
 #include "surface_interaction.cuh"
+#include "bsdf.cuh"
 
 
 namespace futaba {
@@ -14,13 +15,7 @@ struct Albedo {
     if (!scene.intersect(ray, ray.mint, ray.maxt, si)) {
       return Color3f(0.0f);
     }
-
-    Vector3f n = normalize(si.n);
-    if (dot(ray.d, n) > 0.0f)
-      n = -n;
-
-    Color3f L = si.albedo;
-    return L;
+    return BSDF::get_albedo(scene.materials[si.material_id], si);
   }
 };
 
@@ -39,4 +34,3 @@ public:
 
 } // namespace futaba
 #endif
-

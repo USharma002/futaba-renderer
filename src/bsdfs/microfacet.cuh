@@ -68,6 +68,9 @@ struct Microfacet {
     }
 
     HD Color3f fresnel_conductor(float cosThetaI) const {
+        if (eta.x == 0.f && eta.y == 0.f && eta.z == 0.f) {
+            return specularScale;
+        }
         const float etaScale = fmaxf(extIOR, 1e-6f);
         const Color3f relEta = eta / etaScale;
         const Color3f relK   = k   / etaScale;

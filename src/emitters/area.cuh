@@ -67,10 +67,6 @@ struct AreaEmitter {
         light_si.material_id  = tri.material_id;
         light_si.primitive_id = tri_id;
         light_si.front_face   = true;
-        light_si.emission     = (tri.material_id >= 0 &&
-                                 (uint32_t)tri.material_id < scene.materialCount)
-                                ? scene.materials[tri.material_id].emission
-                                : Color3f(0.f);
         es.Le = scene.eval_surface_emission(light_si);
         return true;
     }

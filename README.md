@@ -54,50 +54,54 @@ Futaba is a high-performance, learning-oriented physically-based renderer writte
     ![Intersection Heatmap](assets/dragon-cbox-heatmap.png)
 - [x] **Films**: 32-bit HDR accumulation with zero-copy OpenGL PBO display and EXR export support.
 - [x] **Denoising**: Optional OptiX AI denoiser with albedo/normal guide buffers and tonemapped output.
+- [x] **Path guiding** selector (None / SD-Tree PPG) with dedicated guiding controls panel
+
 
 #### Denoising Demo
 
 ![Optix Denoiser Preview](assets/optix_denoiser.gif)
 
-### Roadmap
-- [x] Done
-  - [x] Normal visualization
-  - [x] Path tracing
-  - [x] Next Event Estimation (NEE)
-  - [x] OptiX denoising
-  - [x] Volume Rendering (Volumetric path tracer, Homogeneous medium)
-- [~] Partially done
-  - [~] Materials
-  - [~] Textures and environment map support
-  - [~] Multiple Importance Sampling (MIS)
-  - [~] Path Guiding (PPG, SD-Tree, Neural training buffer)
-- [ ] Not started
-  - [ ] Bidirectional Path Tracing
-  - [ ] Photon Mapping
-  - [ ] Radiosity
-  - [ ] Basic Differentiable Rendering
+---
+
+## Roadmap
+
+- [x] Path tracing with Russian Roulette
+- [x] Next Event Estimation with MIS
+- [x] Volumetric path tracing (homogeneous media, HG phase function)
+- [x] Environment map emitter with importance sampling
+- [x] Thin-lens depth of field
+- [x] Image textures on materials
+- [x] Rough conductor / dielectric / plastic BSDFs (Beckmann microfacet)
+- [x] OptiX AI denoising with guide buffers
+- [x] Path Guiding (PPG)
+- [ ] Bidirectional path tracing
+- [ ] Photon mapping
+- [ ] Disney principled BSDF
+- [ ] Bump / normal mapping
+- [ ] Spectral rendering
+
+---
 
 ## Architecture Overview
 
 ### Rendering Pipeline
 
-1. **Sensor**: Generates primary rays on the GPU based on camera orientation, optionally applying subpixel stochastic jitter for anti-aliasing.
-2. **Ray Tracing**: Dispatches rays to **NVIDIA OptiX** pipeline modules (`__raygen__`, `__closesthit__`, `__miss__`), utilizing hardware RT cores for geometry queries.
-3. **Integrator**: Computes radiance using CUDA kernels, resolving varying material types and debugging modes directly on the GPU.
-4. **BSDF**: Evaluates physically-based material properties and samples indirect lighting paths.
-5. **Film**: Accumulates floating-point samples directly into mapped OpenGL Pixel Buffer Objects (PBOs) for zero-copy, real-time screen display, while supporting CPU-side extraction for EXR archival.
-
+1. **Sensor** --- generates primary rays on the GPU from the perspective camera, with optional thin-lens DoF and subpixel jitter for anti-aliasing
+2. **OptiX Ray Tracing** --- dispatches rays through `__raygen__` / `__closesthit__` / `__miss__` programs using hardware RT cores
+3. **Integrator** --- CUDA kernel computes radiance; selects path tracer, volumetric path tracer, or visualization mode
+4. **BSDF** --- GPU-side material dispatch evaluates and samples the appropriate lobe (diffuse, microfacet, dielectric, etc.)
+5. **Emitter Sampling** --- NEE samples area lights, point/directional lights, and environment map; MIS weights combine with BSDF sample
+6. **Path Guiding** --- SD-Tree records training data per bounce; after each iteration, the quadtrees are refined and uploaded back to device for the next pass
+7. **Film** --- samples accumulate into a 32-bit float PBO for zero-copy OpenGL display; denoiser reads albedo/normal guide buffers and writes tonemapped output
 
 ```mermaid
 %%{init: {'flowchart': {'curve': 'linear'}}}%%
 flowchart TD
 
-%% Styling
 classDef cpu fill:#e3f2fd,stroke:#1565c0,stroke-width:2px,color:#000;
 classDef gpu fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px,color:#000;
 classDef data fill:#fff3e0,stroke:#e65100,stroke-width:2px,color:#000;
 
-%% Nodes
 main[main.cpp]:::cpu
 FS[FutabaScreen]:::cpu
 SL[SceneLoader]:::cpu
@@ -120,25 +124,21 @@ TRIS[Geometry]:::data
 MATS[Materials]:::data
 EMITS[Emitters]:::data
 
-%% CPU / App Flow
 main --> FS
 FS -->|Loads XML| SL
 SL -->|Builds| LS
 LS -->|Passes to| RH
 FS -->|Drives| RH
 
-%% CPU to GPU Boundary
 RH -->|Configures| OPTIX
 RH -->|Allocates| SGPU
 RH -->|Dispatches| KERNEL
 
-%% GPU Data Structure
 SGPU --> BVH
 SGPU --> TRIS
 SGPU --> MATS
 SGPU --> EMITS
 
-%% GPU Execution
 KERNEL --> SAMP
 KERNEL --> CAM
 KERNEL --> INTG
@@ -147,7 +147,6 @@ INTG -->|Query & Shade| SGPU
 INTG -->|Records Path Data| GUIDE
 GUIDE -->|Guides Rays| INTG
 
-%% Output & Denoising
 KERNEL -->|Accumulate| FILM
 FS -->|Executes Denoising| DENOISE
 DENOISE -->|Denoises Beauty/Albedo/Normal| FILM
@@ -171,9 +170,11 @@ cmake --build . --config Release
 
 ## References
 
-- [Mitsuba Renderer Documentation](https://www.mitsuba-renderer.org/)
-- "Physically Based Rendering: From Theory to Implementation" by Pharr, Jakob, and Humphreys.
-- [TinyEXR](https://github.com/syoyo/tinyexr) for HDR image I/O.
+- Müller et al., [*Practical Path Guiding for Efficient Light-Transport Simulation*](https://tom94.net/pages/publications/mueller17practical-erratum), EGSR 2017
+- Pharr, Jakob, Humphreys --- *Physically Based Rendering: From Theory to Implementation* (PBRT)
+- [Mitsuba Renderer](https://www.mitsuba-renderer.org/) --- scene format reference
+- [TinyEXR](https://github.com/syoyo/tinyexr) --- HDR image I/O
+- [NanoGUI](https://github.com/wjakob/nanogui) --- UI framework
 
 ## License
 

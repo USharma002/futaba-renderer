@@ -27,6 +27,30 @@ namespace futaba {
         }                                                                      \
     } while (0)
 
+inline bool supportsPrefetch() {
+    static int supported = -1;
+    if (supported == -1) {
+        int deviceId = 0;
+        if (cudaGetDevice(&deviceId) == cudaSuccess) {
+            int val = 0;
+            if (cudaDeviceGetAttribute(&val, cudaDevAttrConcurrentManagedAccess, deviceId) == cudaSuccess) {
+                supported = val;
+            } else {
+                supported = 0;
+            }
+        } else {
+            supported = 0;
+        }
+    }
+    return supported == 1;
+}
+
+inline void safeMemPrefetchAsync(const void* devPtr, size_t count, int deviceId) {
+    if (supportsPrefetch()) {
+        CUDA_CHECK(cudaMemPrefetchAsync(devPtr, count, deviceId));
+    }
+}
+
 
 // ---------------------------------------------------------------------------
 // Scene
@@ -86,25 +110,7 @@ struct Scene {
             }
         }
 
-        if (hit && rec.material_id >= 0 && rec.material_id < (int)materialCount) {
-            const Material& mat = materials[rec.material_id];
-            rec.albedo = mat.albedo;
-#ifdef __CUDA_ARCH__
-            if (mat.texObj != 0) {
-                float4 texVal = tex2D<float4>(mat.texObj, rec.uv.x, rec.uv.y);
-                rec.albedo = mat.albedo * Color3f(texVal.x, texVal.y, texVal.z);
-            }
-#endif
-            rec.specular = mat.specular;
-            rec.emission = mat.emission;
-            rec.conductor_eta = mat.conductorEta;
-            rec.conductor_k   = mat.conductorK;
-            rec.ext_ior  = mat.extIOR;
-            rec.ior      = mat.intIOR;
-            rec.alpha    = mat.alpha;
-            rec.is_conductor = mat.isConductor;
-            rec.mat_type = mat.type;
-        }
+
 
         return hit;
     }
@@ -117,7 +123,7 @@ struct Scene {
             if (tri.mesh_id == target_mesh_id) continue;
             if (tri.material_id >= 0 && tri.material_id < (int)materialCount) {
                 int mat_type = materials[tri.material_id].type;
-                if (mat_type == BSDF_ID_NULL) {
+                if (mat_type == BSDF_ID_NULL || mat_type == BSDF_ID_THINDIELECTRIC) {
                     continue;
                 }
             }
@@ -162,18 +168,16 @@ struct Scene {
     // attached emitter. Falls back to the emission baked into the material
     // if no emitter record is available.
     HD Color3f eval_surface_emission(const SurfaceIntersection& si) const {
-        if (meshes == nullptr ||
-            si.shape_id < 0 ||
-            (uint32_t)si.shape_id >= meshCount)
-        {
-            return si.emission; // fallback: material-baked emission
+        if (materials != nullptr && si.material_id >= 0 && (uint32_t)si.material_id < materialCount) {
+            if (meshes != nullptr && si.shape_id >= 0 && (uint32_t)si.shape_id < meshCount) {
+                const int meshEmitterId = meshes[si.shape_id].emitterId;
+                if (meshEmitterId >= 0 && (uint32_t)meshEmitterId < emitterCount) {
+                    return emitter_eval(meshEmitterId, si);
+                }
+            }
+            return materials[si.material_id].emission;
         }
-
-        const int meshEmitterId = meshes[si.shape_id].emitterId;
-        if (meshEmitterId < 0 || (uint32_t)meshEmitterId >= emitterCount)
-            return si.emission;
-
-        return emitter_eval(meshEmitterId, si);
+        return Color3f(0.f);
     }
 
     HD Color3f eval_environment(const Vector3f& dirWorld) const {
@@ -204,25 +208,25 @@ struct Scene {
         emissiveTriCount = emissiveCount;
         emitterTriangleFuncSum = funcSum;
 
+        int deviceId = 0;
+        cudaGetDevice(&deviceId);
+
         if (cdfCount > 0 && hostCdf != nullptr) {
-            CUDA_CHECK(cudaMalloc(&emitterTriangleCdf, (size_t)cdfCount * sizeof(float)));
-            CUDA_CHECK(cudaMemcpy(emitterTriangleCdf, hostCdf,
-                                  (size_t)cdfCount * sizeof(float),
-                                  cudaMemcpyHostToDevice));
+            CUDA_CHECK(cudaMallocManaged(&emitterTriangleCdf, (size_t)cdfCount * sizeof(float)));
+            CUDA_CHECK(cudaMemcpy(emitterTriangleCdf, hostCdf, (size_t)cdfCount * sizeof(float), cudaMemcpyHostToDevice));
+            safeMemPrefetchAsync(emitterTriangleCdf, (size_t)cdfCount * sizeof(float), deviceId);
         }
 
         if (emissiveCount > 0 && hostEmissiveTriangleIndices != nullptr) {
-            CUDA_CHECK(cudaMalloc(&emissiveTriangleIndices, (size_t)emissiveCount * sizeof(int)));
-            CUDA_CHECK(cudaMemcpy(emissiveTriangleIndices, hostEmissiveTriangleIndices,
-                                  (size_t)emissiveCount * sizeof(int),
-                                  cudaMemcpyHostToDevice));
+            CUDA_CHECK(cudaMallocManaged(&emissiveTriangleIndices, (size_t)emissiveCount * sizeof(int)));
+            CUDA_CHECK(cudaMemcpy(emissiveTriangleIndices, hostEmissiveTriangleIndices, (size_t)emissiveCount * sizeof(int), cudaMemcpyHostToDevice));
+            safeMemPrefetchAsync(emissiveTriangleIndices, (size_t)emissiveCount * sizeof(int), deviceId);
         }
 
         if (globalToIndexCount > 0 && hostEmissiveGlobalToIndex != nullptr) {
-            CUDA_CHECK(cudaMalloc(&emissiveGlobalToIndex, (size_t)globalToIndexCount * sizeof(int)));
-            CUDA_CHECK(cudaMemcpy(emissiveGlobalToIndex, hostEmissiveGlobalToIndex,
-                                  (size_t)globalToIndexCount * sizeof(int),
-                                  cudaMemcpyHostToDevice));
+            CUDA_CHECK(cudaMallocManaged(&emissiveGlobalToIndex, (size_t)globalToIndexCount * sizeof(int)));
+            CUDA_CHECK(cudaMemcpy(emissiveGlobalToIndex, hostEmissiveGlobalToIndex, (size_t)globalToIndexCount * sizeof(int), cudaMemcpyHostToDevice));
+            safeMemPrefetchAsync(emissiveGlobalToIndex, (size_t)globalToIndexCount * sizeof(int), deviceId);
         }
     }
 
@@ -236,10 +240,12 @@ struct Scene {
         if (count <= 0 || hostEmitterIndices == nullptr)
             return;
 
-        CUDA_CHECK(cudaMalloc(&nonAreaEmitterIndices, (size_t)count * sizeof(int)));
-        CUDA_CHECK(cudaMemcpy(nonAreaEmitterIndices, hostEmitterIndices,
-                              (size_t)count * sizeof(int),
-                              cudaMemcpyHostToDevice));
+        int deviceId = 0;
+        cudaGetDevice(&deviceId);
+
+        CUDA_CHECK(cudaMallocManaged(&nonAreaEmitterIndices, (size_t)count * sizeof(int)));
+        CUDA_CHECK(cudaMemcpy(nonAreaEmitterIndices, hostEmitterIndices, (size_t)count * sizeof(int), cudaMemcpyHostToDevice));
+        safeMemPrefetchAsync(nonAreaEmitterIndices, (size_t)count * sizeof(int), deviceId);
     }
 
     // -----------------------------------------------------------------------
@@ -269,11 +275,14 @@ struct Scene {
         boundsMin = minP;
         boundsMax = maxP;
 
-        CUDA_CHECK(cudaMalloc(&triangles, triangleCount * sizeof(Triangle)));
-        CUDA_CHECK(cudaMemcpy(triangles, hostTriangles,
-                              triangleCount * sizeof(Triangle),
-                              cudaMemcpyHostToDevice));
-        bvh.build(hostTriangles, triangleCount);
+        int deviceId = 0;
+        cudaGetDevice(&deviceId);
+
+        CUDA_CHECK(cudaMallocManaged(&triangles, triangleCount * sizeof(Triangle)));
+        CUDA_CHECK(cudaMemcpy(triangles, hostTriangles, triangleCount * sizeof(Triangle), cudaMemcpyHostToDevice));
+        safeMemPrefetchAsync(triangles, triangleCount * sizeof(Triangle), deviceId);
+        
+        bvh.build(triangles, triangleCount);
     }
 
     void setMaterials(const Material* hostMaterials, uint32_t count) {
@@ -284,10 +293,12 @@ struct Scene {
         materialCount = count;
         if (materialCount == 0) return;
 
-        CUDA_CHECK(cudaMalloc(&materials, materialCount * sizeof(Material)));
-        CUDA_CHECK(cudaMemcpy(materials, hostMaterials,
-                              materialCount * sizeof(Material),
-                              cudaMemcpyHostToDevice));
+        int deviceId = 0;
+        cudaGetDevice(&deviceId);
+
+        CUDA_CHECK(cudaMallocManaged(&materials, materialCount * sizeof(Material)));
+        CUDA_CHECK(cudaMemcpy(materials, hostMaterials, materialCount * sizeof(Material), cudaMemcpyHostToDevice));
+        safeMemPrefetchAsync(materials, materialCount * sizeof(Material), deviceId);
     }
 
     void setMeshes(const MeshInstanceGPU* hostMeshes, uint32_t count) {
@@ -298,10 +309,12 @@ struct Scene {
         meshCount = count;
         if (meshCount == 0) return;
 
-        CUDA_CHECK(cudaMalloc(&meshes, meshCount * sizeof(MeshInstanceGPU)));
-        CUDA_CHECK(cudaMemcpy(meshes, hostMeshes,
-                              meshCount * sizeof(MeshInstanceGPU),
-                              cudaMemcpyHostToDevice));
+        int deviceId = 0;
+        cudaGetDevice(&deviceId);
+
+        CUDA_CHECK(cudaMallocManaged(&meshes, meshCount * sizeof(MeshInstanceGPU)));
+        CUDA_CHECK(cudaMemcpy(meshes, hostMeshes, meshCount * sizeof(MeshInstanceGPU), cudaMemcpyHostToDevice));
+        safeMemPrefetchAsync(meshes, meshCount * sizeof(MeshInstanceGPU), deviceId);
     }
 
     void setEmitters(const EmitterGPU* hostEmitters, uint32_t count) {
@@ -312,10 +325,12 @@ struct Scene {
         emitterCount = count;
         if (emitterCount == 0) return;
 
-        CUDA_CHECK(cudaMalloc(&emitters, emitterCount * sizeof(EmitterGPU)));
-        CUDA_CHECK(cudaMemcpy(emitters, hostEmitters,
-                              emitterCount * sizeof(EmitterGPU),
-                              cudaMemcpyHostToDevice));
+        int deviceId = 0;
+        cudaGetDevice(&deviceId);
+
+        CUDA_CHECK(cudaMallocManaged(&emitters, emitterCount * sizeof(EmitterGPU)));
+        CUDA_CHECK(cudaMemcpy(emitters, hostEmitters, emitterCount * sizeof(EmitterGPU), cudaMemcpyHostToDevice));
+        safeMemPrefetchAsync(emitters, emitterCount * sizeof(EmitterGPU), deviceId);
     }
 
     void setEnvironmentMap(const Color3f* hostPixels, uint32_t width, uint32_t height,

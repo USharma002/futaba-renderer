@@ -124,6 +124,7 @@ static void fillPropertyList(const pugi::xml_node& node,
             plist.setVector(propName, Vector3f(v.x, v.y, v.z));
         }
         else if (tag == "texture") {
+            std::string texType = child.attribute("type").value();
             std::string texFile = resolveValue(child.attribute("filename").value());
             if (texFile.empty()) {
                 for (const pugi::xml_node& texChild : child.children()) {
@@ -136,7 +137,30 @@ static void fillPropertyList(const pugi::xml_node& node,
             if (!texFile.empty()) {
                 plist.setString(propName + "_texture", texFile);
             }
-            plist.setColor(propName, Color3f(0.6f));
+
+            // For checkerboard textures, extract color0 and color1 and average them
+            if (texType == "checkerboard") {
+                Color3f color0(0.4f), color1(0.2f); // reasonable defaults
+                for (const pugi::xml_node& texChild : child.children()) {
+                    std::string cname = texChild.attribute("name").value();
+                    std::string ctag  = texChild.name();
+                    if ((ctag == "color" || ctag == "rgb" || ctag == "spectrum") && cname == "color0") {
+                        Vector3f v = parseVec3Fn(resolveValue(texChild.attribute("value").value()));
+                        color0 = Color3f(v.x, v.y, v.z);
+                    } else if ((ctag == "color" || ctag == "rgb" || ctag == "spectrum") && cname == "color1") {
+                        Vector3f v = parseVec3Fn(resolveValue(texChild.attribute("value").value()));
+                        color1 = Color3f(v.x, v.y, v.z);
+                    }
+                }
+                Color3f avg((color0.x + color1.x) * 0.5f,
+                            (color0.y + color1.y) * 0.5f,
+                            (color0.z + color1.z) * 0.5f);
+                plist.setColor(propName, avg);
+            } else {
+                // Use white so texture color is the sole contributor
+                // (GPU multiplies mat.albedo * texture_sample)
+                plist.setColor(propName, Color3f(1.0f));
+            }
         }
     }
 }
@@ -151,10 +175,10 @@ static bool flattenBsdfNode(const pugi::xml_node& bsdfNode,
         return false;
 
     const std::string type = bsdfNode.attribute("type").value();
-    if (type == "twosided") {
+    if (type == "twosided" || type == "bumpmap" || type == "mask" || type == "normalmap") {
         const pugi::xml_node inner = bsdfNode.child("bsdf");
         if (!inner) {
-            warnings.push_back("Found <bsdf type='twosided'> without nested <bsdf>; using diffuse fallback.");
+            warnings.push_back("Found <bsdf type='" + type + "'> without nested <bsdf>; using diffuse fallback.");
             bsdfProps.setString("type", "diffuse");
             return true;
         }
@@ -172,6 +196,62 @@ static bool flattenBsdfNode(const pugi::xml_node& bsdfNode,
     return true;
 }
 
+static bool appendMeshGeometry(const std::string& meshName,
+                               int materialId,
+                               int emitterId,
+                               const Matrix4f& transform,
+                               const Matrix4f& normalTransform,
+                               const std::vector<Triangle>& localTriangles,
+                               LoadedScene& out)
+{
+    const uint32_t meshTriangleStart = (uint32_t)out.triangles.size();
+    const int meshId = (int)out.meshes.size();
+
+    Point3f boundsMin(1e30f, 1e30f, 1e30f);
+    Point3f boundsMax(-1e30f, -1e30f, -1e30f);
+
+    for (const auto& localT : localTriangles) {
+        Triangle t = localT;
+        t.p0 = transform * localT.p0;
+        t.p1 = transform * localT.p1;
+        t.p2 = transform * localT.p2;
+
+        if (t.has_normals) {
+            t.n0 = normalize(normalTransform * localT.n0);
+            t.n1 = normalize(normalTransform * localT.n1);
+            t.n2 = normalize(normalTransform * localT.n2);
+        }
+
+        t.material_id = materialId;
+        t.mesh_id = meshId;
+
+        for (const auto& p : {t.p0, t.p1, t.p2}) {
+            boundsMin.x = std::min(boundsMin.x, p.x);
+            boundsMin.y = std::min(boundsMin.y, p.y);
+            boundsMin.z = std::min(boundsMin.z, p.z);
+            boundsMax.x = std::max(boundsMax.x, p.x);
+            boundsMax.y = std::max(boundsMax.y, p.y);
+            boundsMax.z = std::max(boundsMax.z, p.z);
+        }
+
+        out.triangles.push_back(t);
+    }
+
+    MeshInstance meshInst;
+    meshInst.name          = meshName;
+    meshInst.materialId    = materialId;
+    meshInst.triangleStart = meshTriangleStart;
+    meshInst.triangleCount = (uint32_t)localTriangles.size();
+    meshInst.transform     = transform;
+    meshInst.emitterType   = (emitterId >= 0) ? EmitterType::Area : EmitterType::None;
+    meshInst.emitterId     = emitterId;
+    meshInst.boundingBoxMin = boundsMin;
+    meshInst.boundingBoxMax = boundsMax;
+
+    out.meshes.push_back(meshInst);
+    return true;
+}
+
 static bool appendRectangleShape(const std::string& meshName,
                                  int materialId,
                                  int emitterId,
@@ -179,8 +259,8 @@ static bool appendRectangleShape(const std::string& meshName,
                                  const Matrix4f& normalTransform,
                                  LoadedScene& out)
 {
-    const uint32_t meshTriangleStart = (uint32_t)out.triangles.size();
-    const int meshId = (int)out.meshes.size();
+    std::vector<Triangle> localTriangles;
+    localTriangles.reserve(2);
 
     const Point3f local[4] = {
         Point3f(-1.f, -1.f, 0.f),
@@ -189,54 +269,25 @@ static bool appendRectangleShape(const std::string& meshName,
         Point3f(-1.f,  1.f, 0.f)
     };
 
-    Point3f p[4];
-    for (int k = 0; k < 4; ++k)
-        p[k] = transform * local[k];
-
-    Vector3f n = normalize(normalTransform * Vector3f(0.f, 0.f, 1.f));
+    Vector3f n(0.f, 0.f, 1.f);
 
     Triangle t0;
-    t0.p0 = p[0]; t0.p1 = p[1]; t0.p2 = p[2];
+    t0.p0 = local[0]; t0.p1 = local[1]; t0.p2 = local[2];
     t0.n0 = n; t0.n1 = n; t0.n2 = n;
     t0.has_normals = true;
     t0.uv0 = Point2f(0.f, 0.f); t0.uv1 = Point2f(1.f, 0.f); t0.uv2 = Point2f(1.f, 1.f);
     t0.has_uvs = true;
-    t0.material_id = materialId;
-    t0.mesh_id = meshId;
-    out.triangles.push_back(t0);
+    localTriangles.push_back(t0);
 
     Triangle t1;
-    t1.p0 = p[0]; t1.p1 = p[2]; t1.p2 = p[3];
+    t1.p0 = local[0]; t1.p1 = local[2]; t1.p2 = local[3];
     t1.n0 = n; t1.n1 = n; t1.n2 = n;
     t1.has_normals = true;
     t1.uv0 = Point2f(0.f, 0.f); t1.uv1 = Point2f(1.f, 1.f); t1.uv2 = Point2f(0.f, 1.f);
     t1.has_uvs = true;
-    t1.material_id = materialId;
-    t1.mesh_id = meshId;
-    out.triangles.push_back(t1);
+    localTriangles.push_back(t1);
 
-    MeshInstance meshInst;
-    meshInst.name          = meshName;
-    meshInst.materialId    = materialId;
-    meshInst.triangleStart = meshTriangleStart;
-    meshInst.triangleCount = 2;
-    meshInst.transform     = transform;
-    meshInst.emitterType   = (emitterId >= 0) ? EmitterType::Area : EmitterType::None;
-    meshInst.emitterId     = emitterId;
-
-    meshInst.boundingBoxMin = p[0];
-    meshInst.boundingBoxMax = p[0];
-    for (int k = 1; k < 4; ++k) {
-        meshInst.boundingBoxMin.x = std::min(meshInst.boundingBoxMin.x, p[k].x);
-        meshInst.boundingBoxMin.y = std::min(meshInst.boundingBoxMin.y, p[k].y);
-        meshInst.boundingBoxMin.z = std::min(meshInst.boundingBoxMin.z, p[k].z);
-        meshInst.boundingBoxMax.x = std::max(meshInst.boundingBoxMax.x, p[k].x);
-        meshInst.boundingBoxMax.y = std::max(meshInst.boundingBoxMax.y, p[k].y);
-        meshInst.boundingBoxMax.z = std::max(meshInst.boundingBoxMax.z, p[k].z);
-    }
-
-    out.meshes.push_back(meshInst);
-    return true;
+    return appendMeshGeometry(meshName, materialId, emitterId, transform, normalTransform, localTriangles, out);
 }
 
 static bool loadEnvMapEXR(const std::string& filename,
@@ -405,9 +456,6 @@ static bool appendSphereShape(const std::string& meshName,
                               const Matrix4f& normalTransform,
                               LoadedScene& out)
 {
-    const uint32_t meshTriangleStart = (uint32_t)out.triangles.size();
-    const int meshId = (int)out.meshes.size();
-
     const int stacks = 16;
     const int slices = 16;
     const float PI = 3.1415926535f;
@@ -429,13 +477,15 @@ static bool appendSphereShape(const std::string& meshName,
             Vector3f localNormal(sinTheta * cosPhi, sinTheta * sinPhi, cosTheta);
             Point3f localPos = center + localNormal * radius;
 
-            gridP[i][j] = transform * localPos;
-            gridN[i][j] = normalize(normalTransform * localNormal);
+            gridP[i][j] = localPos;
+            gridN[i][j] = localNormal;
             gridUV[i][j] = Point2f((float)j / slices, (float)i / stacks);
         }
     }
 
-    int triangleCount = 0;
+    std::vector<Triangle> localTriangles;
+    localTriangles.reserve(stacks * slices * 2);
+
     for (int i = 0; i < stacks; ++i) {
         for (int j = 0; j < slices; ++j) {
             Point3f p00 = gridP[i][j];
@@ -460,10 +510,7 @@ static bool appendSphereShape(const std::string& meshName,
             t0.has_normals = true;
             t0.uv0 = uv00; t0.uv1 = uv10; t0.uv2 = uv01;
             t0.has_uvs = true;
-            t0.material_id = materialId;
-            t0.mesh_id = meshId;
-            out.triangles.push_back(t0);
-            triangleCount++;
+            localTriangles.push_back(t0);
 
             // Triangle 2
             Triangle t1;
@@ -472,38 +519,48 @@ static bool appendSphereShape(const std::string& meshName,
             t1.has_normals = true;
             t1.uv0 = uv10; t1.uv1 = uv11; t1.uv2 = uv01;
             t1.has_uvs = true;
-            t1.material_id = materialId;
-            t1.mesh_id = meshId;
-            out.triangles.push_back(t1);
-            triangleCount++;
+            localTriangles.push_back(t1);
         }
     }
 
-    MeshInstance meshInst;
-    meshInst.name          = meshName;
-    meshInst.materialId    = materialId;
-    meshInst.triangleStart = meshTriangleStart;
-    meshInst.triangleCount = triangleCount;
-    meshInst.transform     = transform;
-    meshInst.emitterType   = (emitterId >= 0) ? EmitterType::Area : EmitterType::None;
-    meshInst.emitterId     = emitterId;
+    return appendMeshGeometry(meshName, materialId, emitterId, transform, normalTransform, localTriangles, out);
+}
 
-    meshInst.boundingBoxMin = gridP[0][0];
-    meshInst.boundingBoxMax = gridP[0][0];
-    for (int i = 0; i <= stacks; ++i) {
-        for (int j = 0; j <= slices; ++j) {
-            const Point3f& v = gridP[i][j];
-            meshInst.boundingBoxMin.x = std::min(meshInst.boundingBoxMin.x, v.x);
-            meshInst.boundingBoxMin.y = std::min(meshInst.boundingBoxMin.y, v.y);
-            meshInst.boundingBoxMin.z = std::min(meshInst.boundingBoxMin.z, v.z);
-            meshInst.boundingBoxMax.x = std::max(meshInst.boundingBoxMax.x, v.x);
-            meshInst.boundingBoxMax.y = std::max(meshInst.boundingBoxMax.y, v.y);
-            meshInst.boundingBoxMax.z = std::max(meshInst.boundingBoxMax.z, v.z);
-        }
+static bool appendDiskShape(const std::string& meshName,
+                            int materialId,
+                            int emitterId,
+                            const Matrix4f& transform,
+                            const Matrix4f& normalTransform,
+                            LoadedScene& out)
+{
+    const int segments = 32;
+    const float PI = 3.1415926535f;
+    const Vector3f n(0.f, 0.f, 1.f);
+
+    std::vector<Triangle> localTriangles;
+    localTriangles.reserve(segments);
+
+    const Point3f center(0.f, 0.f, 0.f);
+
+    for (int i = 0; i < segments; ++i) {
+        float angle0 = 2.f * PI * (float)i / (float)segments;
+        float angle1 = 2.f * PI * (float)(i + 1) / (float)segments;
+
+        Point3f p0(cosf(angle0), sinf(angle0), 0.f);
+        Point3f p1(cosf(angle1), sinf(angle1), 0.f);
+
+        Triangle t;
+        t.p0 = center; t.p1 = p0; t.p2 = p1;
+        t.n0 = n; t.n1 = n; t.n2 = n;
+        t.has_normals = true;
+        t.uv0 = Point2f(0.5f, 0.5f);
+        t.uv1 = Point2f(0.5f + 0.5f * cosf(angle0), 0.5f + 0.5f * sinf(angle0));
+        t.uv2 = Point2f(0.5f + 0.5f * cosf(angle1), 0.5f + 0.5f * sinf(angle1));
+        t.has_uvs = true;
+        localTriangles.push_back(t);
     }
 
-    out.meshes.push_back(meshInst);
-    return true;
+    return appendMeshGeometry(meshName, materialId, emitterId, transform, normalTransform, localTriangles, out);
 }
 
 static bool appendCubeShape(const std::string& meshName,
@@ -513,9 +570,6 @@ static bool appendCubeShape(const std::string& meshName,
                             const Matrix4f& normalTransform,
                             LoadedScene& out)
 {
-    const uint32_t meshTriangleStart = (uint32_t)out.triangles.size();
-    const int meshId = (int)out.meshes.size();
-
     const Vector3f faceNormals[6] = {
         Vector3f( 1.f,  0.f,  0.f), // +X
         Vector3f(-1.f,  0.f,  0.f), // -X
@@ -538,16 +592,16 @@ static bool appendCubeShape(const std::string& meshName,
         Point2f(0.f, 0.f), Point2f(1.f, 0.f), Point2f(1.f, 1.f), Point2f(0.f, 1.f)
     };
 
-    std::vector<Point3f> allTransformedVerts;
+    std::vector<Triangle> localTriangles;
+    localTriangles.reserve(12);
 
     for (int f = 0; f < 6; ++f) {
         Point3f p[4];
         for (int k = 0; k < 4; ++k) {
-            p[k] = transform * faceVertices[f][k];
-            allTransformedVerts.push_back(p[k]);
+            p[k] = faceVertices[f][k];
         }
 
-        Vector3f n = normalize(normalTransform * faceNormals[f]);
+        Vector3f n = faceNormals[f];
 
         Triangle t0;
         t0.p0 = p[0]; t0.p1 = p[1]; t0.p2 = p[2];
@@ -555,9 +609,7 @@ static bool appendCubeShape(const std::string& meshName,
         t0.has_normals = true;
         t0.uv0 = faceUVs[0]; t0.uv1 = faceUVs[1]; t0.uv2 = faceUVs[2];
         t0.has_uvs = true;
-        t0.material_id = materialId;
-        t0.mesh_id = meshId;
-        out.triangles.push_back(t0);
+        localTriangles.push_back(t0);
 
         Triangle t1;
         t1.p0 = p[0]; t1.p1 = p[2]; t1.p2 = p[3];
@@ -565,33 +617,10 @@ static bool appendCubeShape(const std::string& meshName,
         t1.has_normals = true;
         t1.uv0 = faceUVs[0]; t1.uv1 = faceUVs[2]; t1.uv2 = faceUVs[3];
         t1.has_uvs = true;
-        t1.material_id = materialId;
-        t1.mesh_id = meshId;
-        out.triangles.push_back(t1);
+        localTriangles.push_back(t1);
     }
 
-    MeshInstance meshInst;
-    meshInst.name          = meshName;
-    meshInst.materialId    = materialId;
-    meshInst.triangleStart = meshTriangleStart;
-    meshInst.triangleCount = 12;
-    meshInst.transform     = transform;
-    meshInst.emitterType   = (emitterId >= 0) ? EmitterType::Area : EmitterType::None;
-    meshInst.emitterId     = emitterId;
-
-    meshInst.boundingBoxMin = allTransformedVerts[0];
-    meshInst.boundingBoxMax = allTransformedVerts[0];
-    for (const auto& v : allTransformedVerts) {
-        meshInst.boundingBoxMin.x = std::min(meshInst.boundingBoxMin.x, v.x);
-        meshInst.boundingBoxMin.y = std::min(meshInst.boundingBoxMin.y, v.y);
-        meshInst.boundingBoxMin.z = std::min(meshInst.boundingBoxMin.z, v.z);
-        meshInst.boundingBoxMax.x = std::max(meshInst.boundingBoxMax.x, v.x);
-        meshInst.boundingBoxMax.y = std::max(meshInst.boundingBoxMax.y, v.y);
-        meshInst.boundingBoxMax.z = std::max(meshInst.boundingBoxMax.z, v.z);
-    }
-
-    out.meshes.push_back(meshInst);
-    return true;
+    return appendMeshGeometry(meshName, materialId, emitterId, transform, normalTransform, localTriangles, out);
 }
 
 // ---------------------------------------------------------------------------
@@ -1287,7 +1316,14 @@ bool SceneLoader::load(const std::string& xmlPath,
         if (std::string(node.name()) != "bsdf")
             continue;
 
-        const std::string bsdfId = node.attribute("id").value();
+        std::string bsdfId = node.attribute("id").value();
+        if (bsdfId.empty()) {
+            pugi::xml_node inner = node.child("bsdf");
+            while (inner && bsdfId.empty()) {
+                bsdfId = inner.attribute("id").value();
+                inner = inner.child("bsdf");
+            }
+        }
         if (bsdfId.empty())
             continue;
 
@@ -1500,6 +1536,9 @@ bool SceneLoader::load(const std::string& xmlPath,
                                       meshTransform, normalTransform, out);
                 } else if (shapeType == "cube") {
                     appendCubeShape(meshName, materialId, emitterId,
+                                    meshTransform, normalTransform, out);
+                } else if (shapeType == "disk") {
+                    appendDiskShape(meshName, materialId, emitterId,
                                     meshTransform, normalTransform, out);
                 } else {
                     out.warnings.push_back("Unsupported shape type '" + shapeType + "'; skipping shape '" + meshName + "'.");
