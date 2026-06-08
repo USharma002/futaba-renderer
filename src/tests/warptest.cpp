@@ -171,7 +171,7 @@ public:
         view = view * m_arcball.matrix();
 
         m_shader.bind();
-        // Evaluates matrix expression explicitly to fix template deduction errors
+        // Evaluate matrix expression explicitly to avoid template deduction errors
         m_shader.setUniform("mvp", (projection * view).eval());
         m_shader.drawArray(GL_POINTS, 0, static_cast<uint32_t>(m_count));
 
@@ -282,7 +282,7 @@ private:
             Vector3f mapped(0.0f);
             float binX = 0.0f, binY = 0.0f;
 
-            // HERE: Executing your actual warp.cuh IMPORTANCE SAMPLING functions directly
+            // Map samples using importance sampling warp functions
             switch (m_warpType) {
                 case EWarpType::EUniformSquare: {
                     Point2f res = Warp::squareToUniformSquare(u);
@@ -336,7 +336,7 @@ private:
             maxDensity = std::max(maxDensity, analyticalDensities[i]);
             points.push_back(mapped);
 
-            // THIS IS NOT SAMPLING. This projects the 3D direction vector onto a flat 2D cell grid for histogramming
+            // Project sample to 2D grid for frequency binning
             int bx = std::min(m_xres - 1, std::max(0, static_cast<int>(binX * m_xres)));
             int by = std::min(m_yres - 1, std::max(0, static_cast<int>(binY * m_yres)));
             m_obsFreq[static_cast<size_t>(by * m_xres + bx)] += 1.0;
@@ -357,7 +357,7 @@ private:
 
         m_canvas->updatePoints(points, colors);
 
-        // HERE: Evaluation of your analytical Pdf() methods to build testing expectation arrays
+        // Evaluate analytical PDF to build expected bin frequencies
         auto integrand = [this](double x, double y) -> double {
             if (m_warpType == EWarpType::EUniformSquare) {
                 return Warp::squareToUniformSquarePdf(Point2f(static_cast<float>(x), static_cast<float>(y)));
@@ -474,8 +474,8 @@ private:
         nvgFontSize(ctx, 11.0f);
         nvgTextAlign(ctx, NVG_ALIGN_CENTER | NVG_ALIGN_MIDDLE);
         nvgFillColor(ctx, nvgRGBAf(1.0f, 1.0f, 1.0f, 1.0f));
-        std::string bannerTxt = m_test.passed ? "CHI-SQUARE HYPOTHESIS PASS: Generated points match your analytical PDF methods perfectly."
-                                              : "CHI-SQUARE HYPOTHESIS CRITICAL FAILURE: Parity between sampling generation and PDF broke.";
+        std::string bannerTxt = m_test.passed ? "CHI-SQUARE HYPOTHESIS PASS: Generated points match the analytical PDF."
+                                              : "CHI-SQUARE HYPOTHESIS FAILURE: Mismatch between generated samples and analytical PDF.";
         nvgText(ctx, x + w * 0.5f, bannerY + 9.0f, bannerTxt.c_str(), nullptr);
     }
 

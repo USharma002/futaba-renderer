@@ -2,6 +2,7 @@
 #include "bitmap.h"
 #include "hdrfilm.cuh"
 #include "renderer.h"
+#include "optix_pipeline.h"
 #include "distribution.cuh"
 #include "scene_loader.h"
 #include "integrator_ui.h"
@@ -785,13 +786,13 @@ void FutabaScreen::renderLoop() {
 
             uchar4 *d_pbo_ptr;
             size_t num_bytes;
-            cudaGraphicsMapResources(1, &m_cudaPboResource, 0);
+            cudaGraphicsMapResources(1, &m_cudaPboResource, g_pipeline.renderStream);
             cudaGraphicsResourceGetMappedPointer((void **)&d_pbo_ptr, &num_bytes,
                                                  m_cudaPboResource);
 
             uchar4 *d_vis_pbo_ptr = nullptr;
             if (m_showVisualizer && m_cudaPboResourceVis) {
-                cudaGraphicsMapResources(1, &m_cudaPboResourceVis, 0);
+                cudaGraphicsMapResources(1, &m_cudaPboResourceVis, g_pipeline.renderStream);
                 cudaGraphicsResourceGetMappedPointer((void **)&d_vis_pbo_ptr, &num_bytes,
                                                      m_cudaPboResourceVis);
             }
@@ -847,9 +848,9 @@ void FutabaScreen::renderLoop() {
 
             postprocess();
 
-            cudaGraphicsUnmapResources(1, &m_cudaPboResource, 0);
+            cudaGraphicsUnmapResources(1, &m_cudaPboResource, g_pipeline.renderStream);
             if (m_showVisualizer && m_cudaPboResourceVis) {
-                cudaGraphicsUnmapResources(1, &m_cudaPboResourceVis, 0);
+                cudaGraphicsUnmapResources(1, &m_cudaPboResourceVis, g_pipeline.renderStream);
 
                 // Copy visualizer PBO contents to the visualizer texture
                 glBindBuffer(GL_PIXEL_UNPACK_BUFFER, m_glPboVis);

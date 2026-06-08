@@ -175,6 +175,6 @@ void launch_render(HDRFilm *film,
     );
   }
 
-  // Synchronize device to ensure rendering and memory copies are completed
-  cudaDeviceSynchronize();
+  // Synchronize the render stream to ensure rendering and memory copies are completed
+  cudaStreamSynchronize(g_pipeline.renderStream);
 }

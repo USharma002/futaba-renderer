@@ -20,6 +20,8 @@
 
 namespace futaba {
 
+constexpr int kMaxTraversalStackSize = 64;
+
 struct BVH;
 void buildOptixBVH(BVH& bvh, const Triangle* hostTriangles, uint32_t triangleCount);
 void clearOptixBVH(BVH& bvh);
@@ -69,7 +71,7 @@ struct AABB {
                        0.5f * (minP.z + maxP.z));
     }
 
-    // Your exact, safe intersection logic. Safely swallows NaNs.
+    // Ray-AABB intersection test. Safely handles NaNs.
     HD bool intersectDist(const Ray& ray, float tMin, float tMax, float& dist) const {
         float tx1 = (minP.x - ray.o.x) * ray.dRcp.x;
         float tx2 = (maxP.x - ray.o.x) * ray.dRcp.x;
@@ -288,7 +290,7 @@ struct BVH {
         bool hit = false;
         float closest = tMax;
 
-        int stack[64];
+        int stack[kMaxTraversalStackSize];
         int stackSize = 0;
 
         float dummyDist;
@@ -296,7 +298,9 @@ struct BVH {
             return false;
         }
 
-        stack[stackSize++] = 0;
+        if (stackSize < kMaxTraversalStackSize) {
+            stack[stackSize++] = 0;
+        }
 
         while (stackSize > 0) {
             int nodeIdx = stack[--stackSize];
@@ -321,7 +325,7 @@ struct BVH {
                 bool hitRight = bvhNodes[rightIdx].bounds.intersectDist(ray, tMin, closest, distRight);
 
                 if (hitLeft && hitRight) {
-                    if (stackSize + 2 <= 64) {
+                    if (stackSize + 2 <= kMaxTraversalStackSize) {
                         if (distLeft < distRight) {
                             stack[stackSize++] = rightIdx;
                             stack[stackSize++] = leftIdx;
@@ -331,9 +335,9 @@ struct BVH {
                         }
                     }
                 } else if (hitLeft) {
-                    if (stackSize + 1 <= 64) stack[stackSize++] = leftIdx;
+                    if (stackSize + 1 <= kMaxTraversalStackSize) stack[stackSize++] = leftIdx;
                 } else if (hitRight) {
-                    if (stackSize + 1 <= 64) stack[stackSize++] = rightIdx;
+                    if (stackSize + 1 <= kMaxTraversalStackSize) stack[stackSize++] = rightIdx;
                 }
             }
         }
@@ -376,7 +380,7 @@ struct BVH {
             return false;
         }
 
-        int stack[64];
+        int stack[kMaxTraversalStackSize];
         int stackSize = 0;
 
         float dummyDist;
@@ -384,7 +388,9 @@ struct BVH {
             return false;
         }
 
-        stack[stackSize++] = 0;
+        if (stackSize < kMaxTraversalStackSize) {
+            stack[stackSize++] = 0;
+        }
 
         while (stackSize > 0) {
             int nodeIdx = stack[--stackSize];
@@ -417,7 +423,7 @@ struct BVH {
                 bool hitRight = bvhNodes[rightIdx].bounds.intersectDist(ray, tMin, tMax, distRight);
 
                 if (hitLeft && hitRight) {
-                    if (stackSize + 2 <= 64) {
+                    if (stackSize + 2 <= kMaxTraversalStackSize) {
                         if (distLeft < distRight) {
                             stack[stackSize++] = rightIdx;
                             stack[stackSize++] = leftIdx;
@@ -427,9 +433,9 @@ struct BVH {
                         }
                     }
                 } else if (hitLeft) {
-                    if (stackSize + 1 <= 64) stack[stackSize++] = leftIdx;
+                    if (stackSize + 1 <= kMaxTraversalStackSize) stack[stackSize++] = leftIdx;
                 } else if (hitRight) {
-                    if (stackSize + 1 <= 64) stack[stackSize++] = rightIdx;
+                    if (stackSize + 1 <= kMaxTraversalStackSize) stack[stackSize++] = rightIdx;
                 }
             }
         }
@@ -448,7 +454,7 @@ struct BVH {
 
         int aabb_tests = 0;
 
-        int stack[64];
+        int stack[kMaxTraversalStackSize];
         int stackSize = 0;
 
         float dummyDist;
@@ -457,7 +463,9 @@ struct BVH {
             return aabb_tests;
         }
 
-        stack[stackSize++] = 0;
+        if (stackSize < kMaxTraversalStackSize) {
+            stack[stackSize++] = 0;
+        }
 
         while (stackSize > 0) {
             int nodeIdx = stack[--stackSize];
@@ -473,7 +481,7 @@ struct BVH {
                 bool hitRight = bvhNodes[rightIdx].bounds.intersectDist(ray, tMin, tMax, distRight);
 
                 if (hitLeft && hitRight) {
-                    if (stackSize + 2 <= 64) {
+                    if (stackSize + 2 <= kMaxTraversalStackSize) {
                         if (distLeft < distRight) {
                             stack[stackSize++] = rightIdx;
                             stack[stackSize++] = leftIdx;
@@ -483,9 +491,9 @@ struct BVH {
                         }
                     }
                 } else if (hitLeft) {
-                    if (stackSize + 1 <= 64) stack[stackSize++] = leftIdx;
+                    if (stackSize + 1 <= kMaxTraversalStackSize) stack[stackSize++] = leftIdx;
                 } else if (hitRight) {
-                    if (stackSize + 1 <= 64) stack[stackSize++] = rightIdx;
+                    if (stackSize + 1 <= kMaxTraversalStackSize) stack[stackSize++] = rightIdx;
                 }
             }
         }
