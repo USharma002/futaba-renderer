@@ -44,6 +44,14 @@ HD float mod(float a, float b) {
     return (r < 0.0f) ? r + b : r;
 }
 
+// Power heuristic Multiple Importance Sampling (MIS) weight calculation.
+HD float mis_weight(float pdf_a, float pdf_b) {
+    const float a2 = pdf_a * pdf_a;
+    const float b2 = pdf_b * pdf_b;
+    const float sum = a2 + b2;
+    return (sum > 0.f) ? (a2 / sum) : 0.f;
+}
+
 // -----------------------------------------------------------------------------
 // COLOR UTILS (Replaces Nori's color.h)
 // -----------------------------------------------------------------------------

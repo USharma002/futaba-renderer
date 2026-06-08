@@ -399,7 +399,7 @@ struct BVH {
                     }
                     if (materials && tri.material_id >= 0 && tri.material_id < materialCount) {
                         int mat_type = materials[tri.material_id].type;
-                        if (mat_type == BSDF_ID_NULL || mat_type == BSDF_ID_THINDIELECTRIC) {
+                        if (Material::isShadowTransparent((BSDFType)mat_type)) {
                             continue;
                         }
                     }

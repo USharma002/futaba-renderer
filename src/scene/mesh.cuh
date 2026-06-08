@@ -8,7 +8,7 @@ namespace futaba {
 struct MeshInstanceGPU {
     uint32_t triangleStart;
     uint32_t triangleCount;
-    int      emitterId; // index into Scene.emitters (-1 = not emissive)
+    int      emitterId;     // index into Scene.emitters (-1 = not emissive)
 };
 
 } // namespace futaba

@@ -7,6 +7,8 @@
 #include "renderer.h"
 #include "scene.cuh"
 #include "scene_loader.h"
+#include "texture_manager.h"
+#include "scene_uploader.h"
 #include "denoiser.h"
 #include "guiding.h"
 #include "training_buffer.h"
@@ -118,10 +120,9 @@ private:
   void postprocess();
   void updateIntegratorUI();
   void updateGuidingUI();
+  void handleException(const std::exception &e, const std::string &title = "Error");
 
-  std::vector<cudaArray*>          m_cudaTextureArrays;
-  std::vector<cudaTextureObject_t> m_cudaTextureObjects;
-  void clearTextures();
+  futaba::TextureManager m_textureManager;
 
   // Full-screen loading overlay for background OptiX pipeline compilation
   nanogui::Window*      m_loadingWindow = nullptr;

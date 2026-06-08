@@ -56,9 +56,9 @@ struct EnvironmentMapEmitter {
         ));
 
         const float phi = atan2f(d.x, -d.z);
-        float u = phi / (2.f * M_PI);
+        float u = phi * INV_TWOPI;
         if (u < 0.f) u += 1.f;
-        const float v = acosf(clamp(d.y, -1.f, 1.f)) / M_PI;
+        const float v = acosf(clamp(d.y, -1.f, 1.f)) * INV_PI;
 
         const float x = u * (float)width  - 0.5f;
         const float y = v * (float)height - 0.5f;
@@ -149,15 +149,15 @@ struct EnvironmentMapEmitter {
         ));
 
         const float phi = atan2f(d.x, -d.z);
-        float u = phi / (2.f * M_PI);
+        float u = phi * INV_TWOPI;
         if (u < 0.f) u += 1.f;
-        const float v = acosf(clamp(d.y, -1.f, 1.f)) / M_PI;
+        const float v = acosf(clamp(d.y, -1.f, 1.f)) * INV_PI;
 
         const int x = clamp((int)(u * width), 0, (int)width - 1);
         const int y = clamp((int)(v * height), 0, (int)height - 1);
 
         const Color3f color = pixels[y * width + x];
-        const float lum = 0.212671f * color.x + 0.715160f * color.y + 0.072169f * color.z;
+        const float lum = getLuminance(color);
 
         float sinThetaDir = sqrtf(fmaxf(0.f, 1.f - d.y * d.y));
         if (sinThetaDir <= 0.f) return 0.f;
@@ -203,7 +203,7 @@ struct EnvironmentMapEmitter {
             condCdfsHost[y * (width + 1) + 0] = 0.f;
             for (uint32_t x = 0; x < width; ++x) {
                 const Color3f& color = hostPixels[y * width + x];
-                float lum = 0.212671f * color.x + 0.715160f * color.y + 0.072169f * color.z;
+                float lum = getLuminance(color);
                 float weight = lum * sinTheta;
                 condCdfsHost[y * (width + 1) + (x + 1)] = condCdfsHost[y * (width + 1) + x] + weight;
             }

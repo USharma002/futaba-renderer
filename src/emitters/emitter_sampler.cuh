@@ -7,6 +7,8 @@
 #include "area.cuh"
 #include "power_sampler.cuh"
 #include "launch_params.h"
+#include "sampler.cuh"
+#include "guiding_device.cuh"
 
 namespace futaba {
 
@@ -198,6 +200,90 @@ struct EmitterSampler {
             return PowerEmitterSampler{}.pdf(scene, emitter_primitive_id, wi, dist);
         }
         return 0.f;
+    }
+
+    // Compute the direct emission from the hit surface or environment, weighted using MIS.
+    HD Color3f eval_direct_emission(const Scene& scene,
+                                    const SurfaceIntersection& si,
+                                    bool hit,
+                                    const Ray& ray,
+                                    const Point3f& prev_p,
+                                    float prev_bsdf_pdf,
+                                    bool prev_bsdf_delta) const
+    {
+        Color3f Le(0.f);
+        if (!hit) {
+            Le = scene.eval_environment(ray.d);
+            if (Le.x > 0.f || Le.y > 0.f || Le.z > 0.f) {
+                float mis = 1.f;
+                if (scene.use_nee && !prev_bsdf_delta) {
+                    float emitter_pdf = pdf(scene, -1, ray.d, 1e30f);
+                    mis = mis_weight(prev_bsdf_pdf, emitter_pdf);
+                }
+                Le = mis * Le;
+            }
+        } else {
+            Le = scene.eval_surface_emission(si);
+            if (Le.x > 0.f || Le.y > 0.f || Le.z > 0.f) {
+                float mis = 1.f;
+                if (scene.use_nee && !prev_bsdf_delta) {
+                    Vector3f d = normalize(si.p - prev_p);
+                    float dist = length(si.p - prev_p);
+                    float emitter_pdf = pdf(scene, si.primitive_id, d, dist);
+                    mis = mis_weight(prev_bsdf_pdf, emitter_pdf);
+                }
+                Le = mis * Le;
+            }
+        }
+        return Le;
+    }
+
+    // Sample direct lighting from emitters using Next Event Estimation (NEE).
+    HD Color3f sample_direct_emitter(const Scene& scene,
+                                     const SurfaceIntersection& si,
+                                     const Material& mat,
+                                     Sampler& sampler,
+                                     int guiding_mode,
+                                     STreeNode* sTreeNodes,
+                                     const AABB& sTreeAABB,
+                                     float bsdf_sampling_fraction) const
+    {
+        if (!scene.use_nee || BSDF::is_delta(mat.type) || mat.type == BSDF_ID_NULL)
+            return Color3f(0.f);
+
+        // 1. Sample direction towards emitter
+        EmitterSample es;
+        Point3f u3(sampler.next1D(), sampler.next1D(), sampler.next1D());
+        if (!sample(scene, si, u3, es) || es.pdf <= 0.f)
+            return Color3f(0.f);
+
+        if (es.Le.x <= 0.f && es.Le.y <= 0.f && es.Le.z <= 0.f)
+            return Color3f(0.f);
+
+        Vector3f wo_local = si.to_local(es.d);
+        float cos_theta = wo_local.z;
+        if (cos_theta <= 0.f)
+            return Color3f(0.f);
+
+        // 2. Evaluate BSDF and pdf for the sampled direction
+        Color3f f_bsdf;
+        float bsdf_pdf = 0.f;
+        BSDF::eval_pdf(mat, si, wo_local, f_bsdf, bsdf_pdf);
+        if (f_bsdf.x <= 0.f && f_bsdf.y <= 0.f && f_bsdf.z <= 0.f)
+            return Color3f(0.f);
+
+        // 3. Account for path guiding in MIS
+        GuidingDistribution guiding(guiding_mode, si, sTreeNodes, sTreeAABB);
+        float mixed_pdf = guiding.mixed_pdf(wo_local, bsdf_pdf, bsdf_sampling_fraction);
+
+        // 4. Trace shadow ray to check visibility
+        Ray shadow = si.spawn_ray(es.d);
+        if (scene.occluded(shadow, 1e-6f, es.dist - 1e-4f, es.mesh_id))
+            return Color3f(0.f);
+
+        // 5. Compute MIS weight and direct lighting contribution
+        float mis = es.delta ? 1.f : mis_weight(es.pdf, mixed_pdf);
+        return f_bsdf * (cos_theta / es.pdf) * es.Le * mis;
     }
 };
 

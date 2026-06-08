@@ -17,6 +17,9 @@ namespace futaba {
 
     // Trigger OptiX pipeline initialization synchronously on the calling thread
     void launch_initial_pipeline_compile();
+
+    // Explicitly clean up the global OptiX pipeline and related GPU buffers
+    void cleanup_pipeline();
 }
 
 // CUDA renderer writes directly into the mapped PBO (zero-copy).

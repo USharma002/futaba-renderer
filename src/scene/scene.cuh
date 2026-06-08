@@ -118,12 +118,13 @@ struct Scene {
     HD bool occluded(const Ray& ray, float t_min, float t_max, int target_mesh_id = -1) const {
         if (bvh.nodeCount > 0)
             return bvh.occluded(ray, t_min, t_max, target_mesh_id, triangles, materials, materialCount);
+
         for (uint32_t i = 0; i < triangleCount; ++i) {
             const Triangle& tri = triangles[i];
             if (tri.mesh_id == target_mesh_id) continue;
             if (tri.material_id >= 0 && tri.material_id < (int)materialCount) {
                 int mat_type = materials[tri.material_id].type;
-                if (mat_type == BSDF_ID_NULL || mat_type == BSDF_ID_THINDIELECTRIC) {
+                if (Material::isShadowTransparent((BSDFType)mat_type)) {
                     continue;
                 }
             }
@@ -137,6 +138,7 @@ struct Scene {
     HD int intersectAABBCount(const Ray& ray, float t_min, float t_max) const {
         if (bvh.nodeCount > 0)
             return bvh.intersectAABBCount(ray, t_min, t_max);
+        
         return 0; // Un-accelerated scene has no AABB hierarchy.
     }
 

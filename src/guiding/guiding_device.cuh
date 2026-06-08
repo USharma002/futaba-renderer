@@ -5,6 +5,7 @@
 #include "warp.cuh"
 #include "frame.cuh"
 #include "bsdf_sample.cuh"
+#include "bsdf.cuh"
 #include "guiding.h"
 #include "surface_interaction.cuh"
 #include "ppg/stree.h" 
@@ -58,7 +59,7 @@ struct GuidingDistribution {
             Vector3f wo_world = frame.to_world(bs.wo);
             Point2f canonicalDir = DTreeWrapper::dirToCanonical(wo_world);
             float value = dw->sampling.eval(canonicalDir); 
-            return Color3f(value / (4.f * 3.14159265358979323846f));
+            return Color3f(value * INV_FOURPI);
         }
         return Color3f(0.f);
     }
@@ -119,6 +120,65 @@ struct GuidingDistribution {
             return bs.weight;
         }
         return Color3f(0.f);
+    }
+
+    __host__ __device__ inline float mixed_pdf(const Vector3f& wo_local, float bsdf_pdf, float alpha) const {
+        if (mode == PATH_GUIDING_PPG && sTreeNodes != nullptr) {
+            BSDFSample temp_bs;
+            temp_bs.wo = wo_local;
+            float dTreePdf = pdf(temp_bs);
+            return alpha * bsdf_pdf + (1.f - alpha) * dTreePdf;
+        }
+        return bsdf_pdf;
+    }
+
+    template <typename SamplerType>
+    __host__ __device__ inline Color3f sample_guided(const Material& mat,
+                                                     const SurfaceIntersection& si,
+                                                     BSDFSample& bs,
+                                                     SamplerType& sampler,
+                                                     float alpha,
+                                                     float& dTreePdf) const {
+        if (mode == PATH_GUIDING_PPG && sTreeNodes != nullptr && !BSDF::is_delta(mat.type) && mat.type != BSDF_ID_NULL) {
+            if (sampler.next1D() < alpha) {
+                // Sample BSDF
+                Color3f bsdf_w = BSDF::sample(mat, si, bs, sampler.next2D());
+                if (bs.is_valid()) {
+                    dTreePdf = pdf(bs);
+                    float mixed_pdf_val = alpha * bs.pdf + (1.f - alpha) * dTreePdf;
+                    if (mixed_pdf_val > 0.f) {
+                        bsdf_w = bsdf_w * (bs.pdf / mixed_pdf_val);
+                        bs.pdf = mixed_pdf_val;
+                        return bsdf_w;
+                    } else {
+                        bs.pdf = 0.f;
+                    }
+                }
+            } else {
+                // Sample DTree
+                sample(bs, sampler);
+                if (bs.is_valid()) {
+                    Color3f f_bsdf;
+                    float bsdfPdf = 0.f;
+                    BSDF::eval_pdf(mat, si, bs.wo, f_bsdf, bsdfPdf);
+                    
+                    dTreePdf = bs.pdf; // the pdf returned from sample() is the DTree pdf
+                    float mixed_pdf_val = alpha * bsdfPdf + (1.f - alpha) * dTreePdf;
+                    if (mixed_pdf_val > 0.f) {
+                        float cos_theta = Frame::abs_cos_theta(bs.wo);
+                        Color3f bsdf_w = f_bsdf * (cos_theta / mixed_pdf_val);
+                        bs.pdf = mixed_pdf_val;
+                        return bsdf_w;
+                    } else {
+                        bs.pdf = 0.f;
+                    }
+                }
+            }
+            return Color3f(0.f);
+        } else {
+            dTreePdf = 0.f;
+            return BSDF::sample(mat, si, bs, sampler.next2D());
+        }
     }
 };
 

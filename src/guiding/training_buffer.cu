@@ -96,14 +96,32 @@ void TrainingBufferManager::allocate(int width, int height, int maxDepth) {
 
     m_allocatedCount = (size_t)width * height * maxDepth;
 
-    cudaMalloc(reinterpret_cast<void **>(&m_dActive), m_allocatedCount * sizeof(float));
-    cudaMalloc(reinterpret_cast<void **>(&m_dPosition), m_allocatedCount * sizeof(Point3f));
-    cudaMalloc(reinterpret_cast<void **>(&m_dNormals), m_allocatedCount * sizeof(Color3f));
-    cudaMalloc(reinterpret_cast<void **>(&m_dWi), m_allocatedCount * sizeof(Color3f));
-    cudaMalloc(reinterpret_cast<void **>(&m_dWo), m_allocatedCount * sizeof(Color3f));
-    cudaMalloc(reinterpret_cast<void **>(&m_dRadiance), m_allocatedCount * sizeof(Color3f));
-    cudaMalloc(reinterpret_cast<void **>(&m_dDirectionPdf), m_allocatedCount * sizeof(float));
-    cudaMalloc(reinterpret_cast<void **>(&m_dMaterialId), m_allocatedCount * sizeof(float));
+    float* d_active = nullptr;
+    Point3f* d_position = nullptr;
+    Color3f* d_normals = nullptr;
+    Color3f* d_wi = nullptr;
+    Color3f* d_wo = nullptr;
+    Color3f* d_radiance = nullptr;
+    float* d_direction_pdf = nullptr;
+    float* d_material_id = nullptr;
+
+    cudaMalloc(reinterpret_cast<void **>(&d_active), m_allocatedCount * sizeof(float));
+    cudaMalloc(reinterpret_cast<void **>(&d_position), m_allocatedCount * sizeof(Point3f));
+    cudaMalloc(reinterpret_cast<void **>(&d_normals), m_allocatedCount * sizeof(Color3f));
+    cudaMalloc(reinterpret_cast<void **>(&d_wi), m_allocatedCount * sizeof(Color3f));
+    cudaMalloc(reinterpret_cast<void **>(&d_wo), m_allocatedCount * sizeof(Color3f));
+    cudaMalloc(reinterpret_cast<void **>(&d_radiance), m_allocatedCount * sizeof(Color3f));
+    cudaMalloc(reinterpret_cast<void **>(&d_direction_pdf), m_allocatedCount * sizeof(float));
+    cudaMalloc(reinterpret_cast<void **>(&d_material_id), m_allocatedCount * sizeof(float));
+
+    m_dActive.reset(d_active);
+    m_dPosition.reset(d_position);
+    m_dNormals.reset(d_normals);
+    m_dWi.reset(d_wi);
+    m_dWo.reset(d_wo);
+    m_dRadiance.reset(d_radiance);
+    m_dDirectionPdf.reset(d_direction_pdf);
+    m_dMaterialId.reset(d_material_id);
 
     clear();
 }
@@ -111,25 +129,25 @@ void TrainingBufferManager::allocate(int width, int height, int maxDepth) {
 void TrainingBufferManager::clear() {
     if (m_allocatedCount == 0) return;
 
-    cudaMemset(m_dActive, 0, m_allocatedCount * sizeof(float));
-    cudaMemset(m_dPosition, 0, m_allocatedCount * sizeof(Point3f));
-    cudaMemset(m_dNormals, 0, m_allocatedCount * sizeof(Color3f));
-    cudaMemset(m_dWi, 0, m_allocatedCount * sizeof(Color3f));
-    cudaMemset(m_dWo, 0, m_allocatedCount * sizeof(Color3f));
-    cudaMemset(m_dRadiance, 0, m_allocatedCount * sizeof(Color3f));
-    cudaMemset(m_dDirectionPdf, 0, m_allocatedCount * sizeof(float));
-    cudaMemset(m_dMaterialId, 0, m_allocatedCount * sizeof(float));
+    cudaMemset(m_dActive.get(), 0, m_allocatedCount * sizeof(float));
+    cudaMemset(m_dPosition.get(), 0, m_allocatedCount * sizeof(Point3f));
+    cudaMemset(m_dNormals.get(), 0, m_allocatedCount * sizeof(Color3f));
+    cudaMemset(m_dWi.get(), 0, m_allocatedCount * sizeof(Color3f));
+    cudaMemset(m_dWo.get(), 0, m_allocatedCount * sizeof(Color3f));
+    cudaMemset(m_dRadiance.get(), 0, m_allocatedCount * sizeof(Color3f));
+    cudaMemset(m_dDirectionPdf.get(), 0, m_allocatedCount * sizeof(float));
+    cudaMemset(m_dMaterialId.get(), 0, m_allocatedCount * sizeof(float));
 }
 
 void TrainingBufferManager::freeBuffers() {
-    if (m_dActive) { cudaFree(m_dActive); m_dActive = nullptr; }
-    if (m_dPosition) { cudaFree(m_dPosition); m_dPosition = nullptr; }
-    if (m_dNormals) { cudaFree(m_dNormals); m_dNormals = nullptr; }
-    if (m_dWi) { cudaFree(m_dWi); m_dWi = nullptr; }
-    if (m_dWo) { cudaFree(m_dWo); m_dWo = nullptr; }
-    if (m_dRadiance) { cudaFree(m_dRadiance); m_dRadiance = nullptr; }
-    if (m_dDirectionPdf) { cudaFree(m_dDirectionPdf); m_dDirectionPdf = nullptr; }
-    if (m_dMaterialId) { cudaFree(m_dMaterialId); m_dMaterialId = nullptr; }
+    m_dActive.reset();
+    m_dPosition.reset();
+    m_dNormals.reset();
+    m_dWi.reset();
+    m_dWo.reset();
+    m_dRadiance.reset();
+    m_dDirectionPdf.reset();
+    m_dMaterialId.reset();
 
     m_allocatedCount = 0;
 }
@@ -147,7 +165,7 @@ void TrainingBufferManager::save(const std::string& basePath, int width, int hei
     // 1. Active
     if (m_dActive) {
         std::vector<float> host(count);
-        cudaMemcpy(host.data(), m_dActive, count * sizeof(float), cudaMemcpyDeviceToHost);
+        cudaMemcpy(host.data(), m_dActive.get(), count * sizeof(float), cudaMemcpyDeviceToHost);
         std::ofstream out(prefix + "_active.bin", std::ios::binary);
         out.write(reinterpret_cast<const char*>(host.data()), count * sizeof(float));
     }
@@ -155,7 +173,7 @@ void TrainingBufferManager::save(const std::string& basePath, int width, int hei
     // 2. Position
     if (m_dPosition) {
         std::vector<Point3f> host(count);
-        cudaMemcpy(host.data(), m_dPosition, count * sizeof(Point3f), cudaMemcpyDeviceToHost);
+        cudaMemcpy(host.data(), m_dPosition.get(), count * sizeof(Point3f), cudaMemcpyDeviceToHost);
         std::ofstream out(prefix + "_position.bin", std::ios::binary);
         out.write(reinterpret_cast<const char*>(host.data()), count * sizeof(Point3f));
     }
@@ -163,7 +181,7 @@ void TrainingBufferManager::save(const std::string& basePath, int width, int hei
     // 3. Normals
     if (m_dNormals) {
         std::vector<Color3f> host(count);
-        cudaMemcpy(host.data(), m_dNormals, count * sizeof(Color3f), cudaMemcpyDeviceToHost);
+        cudaMemcpy(host.data(), m_dNormals.get(), count * sizeof(Color3f), cudaMemcpyDeviceToHost);
         std::ofstream out(prefix + "_normals.bin", std::ios::binary);
         out.write(reinterpret_cast<const char*>(host.data()), count * sizeof(Color3f));
     }
@@ -171,7 +189,7 @@ void TrainingBufferManager::save(const std::string& basePath, int width, int hei
     // 4. Incoming Angle (wi)
     if (m_dWi) {
         std::vector<Color3f> host(count);
-        cudaMemcpy(host.data(), m_dWi, count * sizeof(Color3f), cudaMemcpyDeviceToHost);
+        cudaMemcpy(host.data(), m_dWi.get(), count * sizeof(Color3f), cudaMemcpyDeviceToHost);
         std::ofstream out(prefix + "_wi.bin", std::ios::binary);
         out.write(reinterpret_cast<const char*>(host.data()), count * sizeof(Color3f));
     }
@@ -179,7 +197,7 @@ void TrainingBufferManager::save(const std::string& basePath, int width, int hei
     // 5. Outgoing Angle (wo)
     if (m_dWo) {
         std::vector<Color3f> host(count);
-        cudaMemcpy(host.data(), m_dWo, count * sizeof(Color3f), cudaMemcpyDeviceToHost);
+        cudaMemcpy(host.data(), m_dWo.get(), count * sizeof(Color3f), cudaMemcpyDeviceToHost);
         std::ofstream out(prefix + "_wo.bin", std::ios::binary);
         out.write(reinterpret_cast<const char*>(host.data()), count * sizeof(Color3f));
     }
@@ -187,15 +205,15 @@ void TrainingBufferManager::save(const std::string& basePath, int width, int hei
     // 6. Incoming Radiance
     if (m_dRadiance) {
         std::vector<Color3f> host(count);
-        cudaMemcpy(host.data(), m_dRadiance, count * sizeof(Color3f), cudaMemcpyDeviceToHost);
+        cudaMemcpy(host.data(), m_dRadiance.get(), count * sizeof(Color3f), cudaMemcpyDeviceToHost);
         std::ofstream out(prefix + "_radiance.bin", std::ios::binary);
         out.write(reinterpret_cast<const char*>(host.data()), count * sizeof(Color3f));
     }
 
-    // 7. Material ID
+    // 7. Direction PDF
     if (m_dDirectionPdf) {
         std::vector<float> host(count);
-        cudaMemcpy(host.data(), m_dDirectionPdf, count * sizeof(float), cudaMemcpyDeviceToHost);
+        cudaMemcpy(host.data(), m_dDirectionPdf.get(), count * sizeof(float), cudaMemcpyDeviceToHost);
         std::ofstream out(prefix + "_direction_pdf.bin", std::ios::binary);
         out.write(reinterpret_cast<const char*>(host.data()), count * sizeof(float));
     }
@@ -203,7 +221,7 @@ void TrainingBufferManager::save(const std::string& basePath, int width, int hei
     // 8. Material ID
     if (m_dMaterialId) {
         std::vector<float> host(count);
-        cudaMemcpy(host.data(), m_dMaterialId, count * sizeof(float), cudaMemcpyDeviceToHost);
+        cudaMemcpy(host.data(), m_dMaterialId.get(), count * sizeof(float), cudaMemcpyDeviceToHost);
         std::ofstream out(prefix + "_material_id.bin", std::ios::binary);
         out.write(reinterpret_cast<const char*>(host.data()), count * sizeof(float));
     }
@@ -237,13 +255,13 @@ void TrainingBufferManager::visualize(
     dim3 grid((width + block.x - 1) / block.x, (height + block.y - 1) / block.y);
 
     visualize_training_buffer_kernel<<<grid, block>>>(
-        m_dActive,
-        m_dPosition,
-        m_dNormals,
-        m_dWi,
-        m_dWo,
-        m_dRadiance,
-        m_dMaterialId,
+        m_dActive.get(),
+        m_dPosition.get(),
+        m_dNormals.get(),
+        m_dWi.get(),
+        m_dWo.get(),
+        m_dRadiance.get(),
+        m_dMaterialId.get(),
         width, height,
         maxDepth,
         selectedDepth,

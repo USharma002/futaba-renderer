@@ -1,4 +1,4 @@
-#include "common.cuh" // Touch to trigger PTX rebuild 4
+#include "common.cuh"
 #include "bsdf.cuh"
 #include "heatmap.cuh"
 #include "albedo.cuh"
@@ -38,50 +38,33 @@ static __device__ Ray3f setup_ray(uint3 idx, int& index, Sampler& sampler) {
   return params.camera.sampleRay(u, v, sampler);
 }
 
-static __device__ void accumulate_and_write(int index, const Ray3f& ray, const Color3f& radiance) {
+// Accumulate radiance into the film buffer and, when denoising is inactive,
+// tonemap and write the result directly to the PBO.
+//
+// When denoising is active the host-side denoiser->exec() call is responsible
+// for reading film_pixels plus the albedo/normal guide buffers and writing the
+// final tonemapped result to the PBO. Guide buffers are populated by the path
+// kernel's RecordDenoiseGuides template path before this function is called,
+// so no intersection work is done here.
+static __device__ void accumulate_and_write(int index, const Color3f& radiance) {
   Color3f acc = params.film_pixels[index];
   acc += radiance;
   params.film_pixels[index] = acc;
 
-  if (params.denoise_active) {
-    SurfaceIntersection si;
-    Color3f alb(0.f);
-    Vector3f norm(0.f);
-    if (params.scene.intersect(ray, ray.mint, ray.maxt, si)) {
-      alb = BSDF::get_albedo(params.scene.materials[si.material_id], si);
-      norm = Vector3f(dot(si.n, params.camera.right),
-                      dot(si.n, params.camera.trueUp),
-                      dot(si.n, params.camera.forward));
-    } else {
-      alb = params.scene.eval_environment(ray.d);
-    }
-
-    if (params.sampleCount == 1) {
-      params.denoise_albedo_buffer[index] = alb;
-      params.denoise_normal_buffer[index] = norm;
-    } else {
-      params.denoise_albedo_buffer[index] += alb;
-      params.denoise_normal_buffer[index] += norm;
-    }
-  } else {
-    Color3f linear_avg = acc / (float)params.sampleCount;
-    Color3f tonemapped = tonemap::apply(linear_avg, params.tonemapping_mode);
+  if (!params.denoise_active) {
+    Color3f linear_avg  = acc / (float)params.sampleCount;
+    Color3f tonemapped  = tonemap::apply(linear_avg, params.tonemapping_mode);
     Color3f final_color = toSRGB(tonemapped);
 
-    params.pbo_ptr[index].x =
-        (unsigned char)clamp(final_color.x * 255.f, 0.f, 255.f);
-    params.pbo_ptr[index].y =
-        (unsigned char)clamp(final_color.y * 255.f, 0.f, 255.f);
-    params.pbo_ptr[index].z =
-        (unsigned char)clamp(final_color.z * 255.f, 0.f, 255.f);
+    params.pbo_ptr[index].x = (unsigned char)clamp(final_color.x * 255.f, 0.f, 255.f);
+    params.pbo_ptr[index].y = (unsigned char)clamp(final_color.y * 255.f, 0.f, 255.f);
+    params.pbo_ptr[index].z = (unsigned char)clamp(final_color.z * 255.f, 0.f, 255.f);
     params.pbo_ptr[index].w = 255;
   }
 }
 
 extern "C" __global__ void __raygen__render() {
   uint3 idx = optixGetLaunchIndex();
-
-
 
   if (idx.x >= params.width || idx.y >= params.height)
     return;
@@ -126,7 +109,7 @@ extern "C" __global__ void __raygen__render() {
     }
   }
 
-  accumulate_and_write(index, ray, radiance);
+  accumulate_and_write(index, radiance);
 }
 
 extern "C" __global__ void __raygen__path() {
@@ -145,17 +128,17 @@ extern "C" __global__ void __raygen__path() {
 
   if (params.train_active) {
     TrainingBuffers tb;
-    tb.active = params.train_active;
-    tb.position = params.train_position;
-    tb.normals = params.train_normals;
-    tb.wi = params.train_wi;
-    tb.wo = params.train_wo;
-    tb.radiance = params.train_radiance;
+    tb.active        = params.train_active;
+    tb.position      = params.train_position;
+    tb.normals       = params.train_normals;
+    tb.wi            = params.train_wi;
+    tb.wo            = params.train_wo;
+    tb.radiance      = params.train_radiance;
     tb.direction_pdf = params.train_direction_pdf;
-    tb.material_id = params.train_material_id;
-    tb.max_depth = params.max_depth;
-    tb.pixel_index = index;
-    tb.img_size = params.width * params.height;
+    tb.material_id   = params.train_material_id;
+    tb.max_depth     = params.max_depth;
+    tb.pixel_index   = index;
+    tb.img_size      = params.width * params.height;
 
     if (params.denoise_active && params.denoise_albedo_buffer && params.denoise_normal_buffer) {
       radiance = integrator.sample<true, true>(
@@ -188,7 +171,7 @@ extern "C" __global__ void __raygen__path() {
     }
   }
 
-  accumulate_and_write(index, ray, radiance);
+  accumulate_and_write(index, radiance);
 }
 
 extern "C" __global__ void __raygen__volpath() {
@@ -205,7 +188,7 @@ extern "C" __global__ void __raygen__volpath() {
   VolumetricPath integrator(params.max_depth, params.rr_depth, false, light_sampler);
   Color3f radiance = integrator.sample(ray, params.scene, sampler);
 
-  accumulate_and_write(index, ray, radiance);
+  accumulate_and_write(index, radiance);
 }
 
 extern "C" __global__ void __closesthit__ch() {
@@ -237,8 +220,8 @@ extern "C" __global__ void __miss__ms() {
 
 extern "C" __global__ void __anyhit__shadow() {
   unsigned int target_mesh_id = optixGetPayload_0();
-  unsigned int primIdx = optixGetPrimitiveIndex();
-  const Triangle &tri = params.scene.triangles[primIdx];
+  unsigned int primIdx        = optixGetPrimitiveIndex();
+  const Triangle &tri         = params.scene.triangles[primIdx];
 
   if (tri.mesh_id == (int)target_mesh_id) {
     optixIgnoreIntersection();
@@ -246,7 +229,7 @@ extern "C" __global__ void __anyhit__shadow() {
 
   if (tri.material_id >= 0 && tri.material_id < (int)params.scene.materialCount) {
     int mat_type = params.scene.materials[tri.material_id].type;
-    if (mat_type == BSDF_ID_NULL || mat_type == BSDF_ID_THINDIELECTRIC) {
+    if (futaba::Material::isShadowTransparent((futaba::BSDFType)mat_type)) {
       optixIgnoreIntersection();
     }
   }

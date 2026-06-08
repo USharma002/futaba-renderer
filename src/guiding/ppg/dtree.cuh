@@ -630,7 +630,7 @@ struct DTreeWrapper {
         float phi = std::atan2(d.y, d.x);
         while (phi < 0.0f) phi += 2.0f * M_PI;
 
-        return Point2f((cosTheta + 1.f) * 0.5f, phi / (2.f * M_PI));
+        return Point2f((cosTheta + 1.f) * 0.5f, phi * INV_TWOPI);
     }
 
     template <typename SamplerType>

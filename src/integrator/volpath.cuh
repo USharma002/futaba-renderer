@@ -19,15 +19,7 @@ struct VolumetricPath {
     HD VolumetricPath(int max_d = 8, int rr_d = 5, bool hide_e = false, EmitterSampler sampler = EmitterSampler())
         : max_depth(max_d), rr_depth(rr_d), hide_emitters(hide_e), emitter_sampler(sampler) {}
 
-    HD static float mis_weight(float pdf_a, float pdf_b) {
-        const float a2 = pdf_a * pdf_a;
-        const float b2 = pdf_b * pdf_b;
-        const float d  = a2 + b2;
-        if (d <= 0.f)
-            return 0.f;
-        const float w = a2 / d;
-        return isfinite(w) ? w : 0.f;
-    }
+
 
     HD Color3f sample(const Ray& ray, const Scene& scene, Sampler& sampler) const {
         Color3f L(0.f), beta(1.f);
@@ -112,32 +104,15 @@ struct VolumetricPath {
                 continue;
             }
 
+            // ---------------------- Direct emission ----------------------
+            Color3f Le = emitter_sampler.eval_direct_emission(scene, si, hit, current_ray, prev_p, prev_bsdf_pdf, prev_bsdf_delta);
+            L += beta * Le;
+
             if (!hit) {
-                const Color3f Le = scene.eval_environment(current_ray.d);
-                if (Le.x > 0.f || Le.y > 0.f || Le.z > 0.f) {
-                    float w = 1.f;
-                    if (scene.use_nee && !prev_bsdf_delta) {
-                        w = mis_weight(prev_bsdf_pdf,
-                                       emitter_sampler.pdf(scene, -1, current_ray.d, 1e30f));
-                    }
-                    L += beta * w * Le;
-                }
                 break;
             }
 
             const Material& mat = scene.materials[si.material_id];
-
-            Color3f emission = scene.eval_surface_emission(si);
-            if (emission.x > 0.f || emission.y > 0.f || emission.z > 0.f) {
-                float w = 1.f;
-                if (scene.use_nee && !prev_bsdf_delta) {
-                    const Vector3f d = normalize(si.p - prev_p);
-                    const float dist = length(si.p - prev_p);
-                    w = mis_weight(prev_bsdf_pdf,
-                                   emitter_sampler.pdf(scene, si.primitive_id, d, dist));
-                }
-                L += beta * w * emission;
-            }
 
             if (scene.use_nee && !BSDF::is_delta(mat.type)) {
                 EmitterSample es;

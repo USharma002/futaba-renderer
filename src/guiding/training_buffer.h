@@ -1,6 +1,7 @@
 #pragma once
 
 #include "types.cuh"
+#include "cuda_unique_ptr.h"
 #include <vector_types.h>
 #include <string>
 
@@ -38,27 +39,27 @@ public:
     void save(const std::string& basePath, int width, int height, int maxDepth);
 
     // Getters for device pointers
-    float* getActive() const { return m_dActive; }
-    Point3f* getPosition() const { return m_dPosition; }
-    Color3f* getNormals() const { return m_dNormals; }
-    Color3f* getWi() const { return m_dWi; }
-    Color3f* getWo() const { return m_dWo; }
-    Color3f* getRadiance() const { return m_dRadiance; }
-    float* getDirectionPdf() const { return m_dDirectionPdf; }
-    float* getMaterialId() const { return m_dMaterialId; }
+    float* getActive() const { return m_dActive.get(); }
+    Point3f* getPosition() const { return m_dPosition.get(); }
+    Color3f* getNormals() const { return m_dNormals.get(); }
+    Color3f* getWi() const { return m_dWi.get(); }
+    Color3f* getWo() const { return m_dWo.get(); }
+    Color3f* getRadiance() const { return m_dRadiance.get(); }
+    float* getDirectionPdf() const { return m_dDirectionPdf.get(); }
+    float* getMaterialId() const { return m_dMaterialId.get(); }
 
     // Run visualization kernel to write the selected channel/depth to a PBO
     void visualize(int width, int height, int maxDepth, int selectedDepth, int selectedBufferType, uchar4* d_pbo_ptr);
 
 private:
-    float* m_dActive = nullptr;
-    Point3f* m_dPosition = nullptr;
-    Color3f* m_dNormals = nullptr;
-    Color3f* m_dWi = nullptr;
-    Color3f* m_dWo = nullptr;
-    Color3f* m_dRadiance = nullptr;
-    float* m_dDirectionPdf = nullptr;
-    float* m_dMaterialId = nullptr;
+    CudaUniquePtr<float> m_dActive;
+    CudaUniquePtr<Point3f> m_dPosition;
+    CudaUniquePtr<Color3f> m_dNormals;
+    CudaUniquePtr<Color3f> m_dWi;
+    CudaUniquePtr<Color3f> m_dWo;
+    CudaUniquePtr<Color3f> m_dRadiance;
+    CudaUniquePtr<float> m_dDirectionPdf;
+    CudaUniquePtr<float> m_dMaterialId;
 
     size_t m_allocatedCount = 0;
 };

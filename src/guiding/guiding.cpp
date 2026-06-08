@@ -1,6 +1,7 @@
 #include "guiding.h"
 #include "launch_params.h"
 #include "hdrfilm.cuh"
+#include "common.cuh"
 #include <iostream>
 #include <cmath>
 #include <nanogui/nanogui.h>
@@ -288,7 +289,7 @@ public:
         for (size_t i = 0; i < totalElements; ++i) {
             if (hostActive[i] <= 0.5f) continue;
 
-            float lum = 0.2126f * hostRadiance[i].x + 0.7152f * hostRadiance[i].y + 0.0722f * hostRadiance[i].z;
+            float lum = getLuminance(hostRadiance[i]);
             if (!std::isfinite(lum) || lum < 0.f) lum = 0.f;
             const float directionPdf = hostPdf[i];
             if (!std::isfinite(directionPdf) || directionPdf <= 0.f) continue;

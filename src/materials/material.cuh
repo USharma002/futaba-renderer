@@ -12,6 +12,8 @@ enum BSDFType {
     BSDF_ID_NULL             = 4,
     BSDF_ID_THINDIELECTRIC   = 5,
     BSDF_ID_ROUGHDIELECTRIC  = 6,
+    BSDF_ID_ROUGHCONDUCTOR   = 7,
+    BSDF_ID_ROUGHPLASTIC     = 8,
 };
 
 struct Material {
@@ -38,6 +40,12 @@ struct Material {
     HD Material(const Color3f& a, const Color3f& e, BSDFType t, float extIor, float intIor, float roughness)
         : albedo(a), specular(1.0f), emission(e), conductorEta(0.f), conductorK(1.f),
           alpha(roughness), extIOR(extIor), intIOR(intIor), isConductor(false), type(t), texObj(0){}
+
+    /// Returns true if this material type should not block shadow rays
+    /// (i.e., it is fully transmissive for direct-lighting visibility tests).
+    HD static bool isShadowTransparent(BSDFType t) {
+        return t == BSDF_ID_NULL || t == BSDF_ID_THINDIELECTRIC;
+    }
 };
 
 } // namespace futaba

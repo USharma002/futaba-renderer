@@ -17,9 +17,7 @@ using namespace nanogui;
 using namespace futaba;
 namespace fs = std::filesystem;
 
-static cudaTextureObject_t createCudaTexture(const std::string& filename,
-                                             std::vector<cudaArray*>& allocatedArrays,
-                                             std::vector<cudaTextureObject_t>& allocatedTextures);
+
 
 static const std::vector<std::string> g_allBufferNames = {
     "Active",
@@ -280,21 +278,44 @@ FutabaScreen::FutabaScreen(int width, int height)
         m_lightSamplerCombo->setSelectedIndex((int)m_lightSamplerType);
         m_lightSamplerCombo->setFixedWidth(130);
         m_lightSamplerCombo->setCallback([this](int index) {
-            m_lightSamplerType = index;
-            m_film->clear();
+            try {
+                if (index == futaba::LIGHT_SAMPLER_POWER) {
+                    throw std::runtime_error("Power-weighted light sampling is not implemented yet!");
+                }
+                m_lightSamplerType = index;
+                m_film->clear();
+            } catch (const std::exception& e) {
+                m_lightSamplerCombo->setSelectedIndex((int)m_lightSamplerType);
+                handleException(e, "Not Implemented");
+            }
         });
 
         guidingCombo->setCallback([this, cbTraining, guidingCombo](int index) {
-            auto activeMethod = GuidingRegistry::getMethods()[index];
-            m_pathGuidingMode = activeMethod->getMode();
-            m_guiding.setMode((PathGuidingMode)m_pathGuidingMode);
-            if (m_pathGuidingMode != 0 && !m_collectTraining) {
-                m_collectTraining = true;
-                cbTraining->setChecked(true);
+            try {
+                auto activeMethod = GuidingRegistry::getMethods()[index];
+                if (activeMethod->getMode() == futaba::PATH_GUIDING_NPM) {
+                    throw std::runtime_error("NPM (Neural) path guiding is not implemented yet!");
+                }
+                m_pathGuidingMode = activeMethod->getMode();
+                m_guiding.setMode((PathGuidingMode)m_pathGuidingMode);
+                if (m_pathGuidingMode != 0 && !m_collectTraining) {
+                    m_collectTraining = true;
+                    cbTraining->setChecked(true);
+                }
+                updateGuidingUI();
+                updateVisualizerDropdown();
+                m_film->clear();
+            } catch (const std::exception& e) {
+                int prevIndex = 0;
+                for (size_t i = 0; i < GuidingRegistry::getMethods().size(); ++i) {
+                    if (GuidingRegistry::getMethods()[i]->getMode() == m_pathGuidingMode) {
+                        prevIndex = (int)i;
+                        break;
+                    }
+                }
+                guidingCombo->setSelectedIndex(prevIndex);
+                handleException(e, "Not Implemented");
             }
-            updateGuidingUI();
-            updateVisualizerDropdown();
-            m_film->clear();
         });
 
         new Widget(settingsGrid);
@@ -539,7 +560,7 @@ FutabaScreen::FutabaScreen(int width, int height)
 }
 
 FutabaScreen::~FutabaScreen() {
-    clearTextures();
+    m_textureManager.clear();
     delete m_film;
     m_film = nullptr;
     m_scene.clear();
@@ -577,202 +598,74 @@ FutabaScreen::~FutabaScreen() {
 
 bool FutabaScreen::loadScene(const std::string &xmlPath) {
     try {
-        clearTextures();
-    SceneLoader loader;
-    LoadedScene loaded;
-    std::string error;
+        m_textureManager.clear();
+        SceneLoader loader;
+        LoadedScene loaded;
+        std::string error;
 
-    if (!loader.load(xmlPath, loaded, error)) {
-        auto dlg = new MessageDialog(this, MessageDialog::Type::Warning,
-                                                                 "Scene load failed", error);
-        (void)dlg;
-        return false;
-    }
-
-    m_scene.clear();
-
-    std::string baseDir = fs::path(xmlPath).parent_path().string();
-    if (baseDir.empty()) baseDir = ".";
-    for (size_t i = 0; i < loaded.materials.size(); ++i) {
-        if (i < loaded.materialTexturePaths.size() && !loaded.materialTexturePaths[i].empty()) {
-            fs::path texPath = fs::path(baseDir) / loaded.materialTexturePaths[i];
-            cudaTextureObject_t texObj = createCudaTexture(texPath.string(), m_cudaTextureArrays, m_cudaTextureObjects);
-            loaded.materials[i].texObj = texObj;
-        }
-    }
-
-    m_scene.setTriangles(loaded.triangles.data(),
-                                             (uint32_t)loaded.triangles.size());
-    m_scene.setMaterials(loaded.materials.data(),
-                                             (uint32_t)loaded.materials.size());
-    
-    std::vector<futaba::EmitterGPU> emittersGPU;
-    emittersGPU.reserve(loaded.emitters.size());
-    for (const auto& emitter : loaded.emitters) {
-        futaba::EmitterGPU g;
-        g.type = static_cast<uint32_t>(emitter.type);
-        g.flags = emitter.twoSided ? futaba::EMITTER_FLAG_TWO_SIDED : 0u;
-        g.radiance = emitter.radiance;
-        g.position = emitter.position;
-        g.direction = emitter.direction;
-        g.attachedMeshId = -1;
-        emittersGPU.push_back(g);
-    }
-
-    // Convert and upload mesh instances
-    std::vector<futaba::MeshInstanceGPU> meshGPU;
-    for (size_t i = 0; i < loaded.meshes.size(); ++i) {
-        const auto& mesh = loaded.meshes[i];
-        futaba::MeshInstanceGPU m;
-        m.triangleStart = mesh.triangleStart;
-        m.triangleCount = mesh.triangleCount;
-        m.emitterId = mesh.emitterId;
-        meshGPU.push_back(m);
-
-        if (mesh.emitterId >= 0 && mesh.emitterId < (int)emittersGPU.size()) {
-            emittersGPU[mesh.emitterId].attachedMeshId = (int)i;
-        }
-    }
-    m_scene.setMeshes(meshGPU.data(), (uint32_t)meshGPU.size());
-    m_scene.setEmitters(emittersGPU.data(), (uint32_t)emittersGPU.size());
-
-    // Build emissive-triangle distribution (area * emission luminance)
-    std::vector<int> emissiveTriIndices;
-    std::vector<float> emissiveWeights;
-    emissiveTriIndices.reserve(loaded.triangles.size());
-    emissiveWeights.reserve(loaded.triangles.size());
-
-    auto luminance = [](const Color3f &c) {
-        return 0.2126f * c.x + 0.7152f * c.y + 0.0722f * c.z;
-    };
-
-    auto triangleEmission = [&](const Triangle &t) -> Color3f {
-        if (t.mesh_id >= 0 && t.mesh_id < (int)loaded.meshes.size()) {
-            const int emitterId = loaded.meshes[t.mesh_id].emitterId;
-            if (emitterId >= 0 && emitterId < (int)loaded.emitters.size()) {
-                return loaded.emitters[emitterId].radiance;
-            }
+        if (!loader.load(xmlPath, loaded, error)) {
+            auto dlg = new MessageDialog(this, MessageDialog::Type::Warning,
+                                         "Scene load failed", error);
+            (void)dlg;
+            return false;
         }
 
-        if (t.material_id >= 0 && t.material_id < (int)loaded.materials.size()) {
-            return loaded.materials[t.material_id].emission;
+        m_scene.clear();
+
+        UploadedSceneConfig config = SceneUploader::upload(
+            loaded, xmlPath, m_scene, m_textureManager, m_useVertexNormals, m_useNEE
+        );
+
+        {
+            AABB sceneBounds;
+            sceneBounds.minP = m_scene.boundsMin;
+            sceneBounds.maxP = m_scene.boundsMax;
+            m_guiding.setSceneBounds(sceneBounds);
         }
 
-        return Color3f(0.f);
-    };
-
-    for (size_t i = 0; i < loaded.triangles.size(); ++i) {
-        const Triangle &t = loaded.triangles[i];
-        float area = t.area();
-        Color3f emission = triangleEmission(t);
-        float w = area * luminance(emission);
-        if (w > 0.f) {
-            emissiveTriIndices.push_back((int)i);
-            emissiveWeights.push_back(w);
+        if (config.integratorType == "volpath") {
+            m_integratorMode = futaba::INTEGRATOR_VOLPATH;
+        } else {
+            m_integratorMode = futaba::INTEGRATOR_PATH;
         }
-    }
-
-    if (!emissiveWeights.empty()) {
-        futaba::Distribution1D dist;
-        dist.build(emissiveWeights);
-        // Build global->emissive index map
-        std::vector<int> globalToEmissive(loaded.triangles.size(), -1);
-        for (size_t i = 0; i < emissiveTriIndices.size(); ++i) {
-            int g = emissiveTriIndices[i];
-            if (g >= 0 && g < (int)globalToEmissive.size())
-                globalToEmissive[g] = (int)i;
+        if (m_integratorCombo != nullptr) {
+            m_integratorCombo->setSelectedIndex(m_integratorMode);
         }
-        // Upload cdf and index list to device (also provide global mapping)
-        m_scene.setEmitterTriangleDistribution(dist.cdfData(), (int)dist.cdf.size(), dist.funcSum, emissiveTriIndices.data(), (int)emissiveTriIndices.size(), globalToEmissive.data(), (int)globalToEmissive.size());
-    } else {
-        m_scene.setEmitterTriangleDistribution(nullptr, 0, 0.f, nullptr, 0, nullptr, 0);
-    }
 
-    // Upload non-area (point / directional) emitter indices for NEE sampling
-    {
-        std::vector<int> nonAreaIndices;
-        for (size_t i = 0; i < emittersGPU.size(); ++i) {
-            const uint32_t t = emittersGPU[i].type;
-            if (t == futaba::kEmitterTypePoint || t == futaba::kEmitterTypeDirectional)
-                nonAreaIndices.push_back((int)i);
+        if (config.hasCamera) {
+            int fw, fh;
+            glfwGetFramebufferSize(glfwWindow(), &fw, &fh);
+            float currentAspect = (float)fw / (float)fh;
+
+            m_currentFocusDistance = config.currentFocusDistance;
+
+            m_camera.init(config.camOrigin, config.camTarget, config.camUp,
+                          config.camFov, currentAspect,
+                          m_currentFocusDistance,
+                          m_currentApertureRadius);
+            m_currentFov = config.camFov;
+            if (m_fovSlider)
+                m_fovSlider->setValue(fovToSlider(m_currentFov));
+            if (m_focusSlider)
+                m_focusSlider->setValue(focusDistanceToSlider(m_currentFocusDistance));
+            if (m_apertureSlider)
+                m_apertureSlider->setValue(apertureToSlider(m_currentApertureRadius));
+            m_camPos =
+                ::Vector3f(config.camOrigin.x, config.camOrigin.y, config.camOrigin.z);
+            ::Vector3f fwd(config.camTarget.x - config.camOrigin.x,
+                           config.camTarget.y - config.camOrigin.y,
+                           config.camTarget.z - config.camOrigin.z);
+            m_camForward = normalize(fwd);
+            m_camUp = config.camUp;
         }
-        if (!nonAreaIndices.empty())
-            m_scene.setNonAreaEmitters(nonAreaIndices.data(), (int)nonAreaIndices.size());
-        else
-            m_scene.setNonAreaEmitters(nullptr, 0);
-    }
 
-    if (loaded.hasEnvMap) {
-        m_scene.setEnvironmentMap(loaded.envMapPixels.data(),
-                                  (uint32_t)loaded.envMapWidth,
-                                  (uint32_t)loaded.envMapHeight,
-                                  loaded.envMapToWorld);
-    } else if (loaded.hasConstantEnv) {
-        m_scene.setConstantEnvironment(loaded.constantEnv);
-    } else {
-        m_scene.setEnvironmentMap(nullptr, 0, 0, ::Matrix4f());
-    }
-    
-    m_scene.use_vertex_normals = m_useVertexNormals;
-    m_scene.use_nee = m_useNEE;
-
-    m_scene.hasMedium = loaded.hasMedium;
-    m_scene.mediumMeshId = loaded.mediumMeshId;
-    m_scene.medium = Medium(MEDIUM_HOMOGENEOUS, HomogeneousMedium(loaded.mediumSigmaS, loaded.mediumSigmaA, loaded.mediumG));
-    {
-        AABB sceneBounds;
-        sceneBounds.minP = m_scene.boundsMin;
-        sceneBounds.maxP = m_scene.boundsMax;
-        m_guiding.setSceneBounds(sceneBounds);
-    }
-
-    if (loaded.integratorType == "volpath") {
-        m_integratorMode = futaba::INTEGRATOR_VOLPATH;
-    } else {
-        m_integratorMode = futaba::INTEGRATOR_PATH;
-    }
-    if (m_integratorCombo != nullptr) {
-        m_integratorCombo->setSelectedIndex(m_integratorMode);
-    }
-
-    if (loaded.hasCamera) {
-        int fw, fh;
-        glfwGetFramebufferSize(glfwWindow(), &fw, &fh);
-        float currentAspect = (float)fw / (float)fh;
-        ::Vector3f toTarget(loaded.camTarget.x - loaded.camOrigin.x,
-                            loaded.camTarget.y - loaded.camOrigin.y,
-                            loaded.camTarget.z - loaded.camOrigin.z);
-        float loadedFocusDistance = toTarget.length();
-        if (loadedFocusDistance > 0.f)
-            m_currentFocusDistance = loadedFocusDistance;
-
-        m_camera.init(loaded.camOrigin, loaded.camTarget, loaded.camUp,
-                                    loaded.camFov, currentAspect,
-                                    m_currentFocusDistance,
-                                    m_currentApertureRadius);
-        m_currentFov = loaded.camFov;
-        if (m_fovSlider)
-            m_fovSlider->setValue(fovToSlider(m_currentFov));
-        if (m_focusSlider)
-            m_focusSlider->setValue(focusDistanceToSlider(m_currentFocusDistance));
-        if (m_apertureSlider)
-            m_apertureSlider->setValue(apertureToSlider(m_currentApertureRadius));
-        m_camPos =
-                ::Vector3f(loaded.camOrigin.x, loaded.camOrigin.y, loaded.camOrigin.z);
-        ::Vector3f fwd(loaded.camTarget.x - loaded.camOrigin.x,
-                                     loaded.camTarget.y - loaded.camOrigin.y,
-                                     loaded.camTarget.z - loaded.camOrigin.z);
-        m_camForward = normalize(fwd);
-        m_camUp = loaded.camUp;
-    }
-
-    m_sceneLabel->setCaption(fs::path(xmlPath).filename().string());
-    if (m_triCountLabel)
-        m_triCountLabel->setCaption("Triangles: " +
-                                                                std::to_string(loaded.triangles.size()));
-    performLayout();
-    m_film->clear();
-    return true;
+        m_sceneLabel->setCaption(fs::path(xmlPath).filename().string());
+        if (m_triCountLabel)
+            m_triCountLabel->setCaption("Triangles: " +
+                                        std::to_string(config.triangleCount));
+        performLayout();
+        m_film->clear();
+        return true;
     } catch (const std::exception &e) {
         auto dlg = new MessageDialog(this, MessageDialog::Type::Warning,
                                      "Scene load failed", e.what());
@@ -1231,76 +1124,7 @@ void FutabaScreen::freeTrainingBuffers() {
     m_trainManager.freeBuffers();
 }
 
-static cudaTextureObject_t createCudaTexture(const std::string& filename,
-                                             std::vector<cudaArray*>& allocatedArrays,
-                                             std::vector<cudaTextureObject_t>& allocatedTextures)
-{
-    int width = 0, height = 0, channels = 0;
-    unsigned char* data = stbi_load(filename.c_str(), &width, &height, &channels, 4); // load as RGBA
-    if (!data) {
-        std::cerr << "Failed to load texture: " << filename << std::endl;
-        return 0;
-    }
 
-    cudaChannelFormatDesc channelDesc = cudaCreateChannelDesc(8, 8, 8, 8, cudaChannelFormatKindUnsigned);
-    cudaArray* cuArray = nullptr;
-    cudaError_t err = cudaMallocArray(&cuArray, &channelDesc, width, height);
-    if (err != cudaSuccess) {
-        std::cerr << "CUDA malloc array failed: " << cudaGetErrorString(err) << std::endl;
-        stbi_image_free(data);
-        return 0;
-    }
-
-    err = cudaMemcpy2DToArray(cuArray, 0, 0, data, width * 4 * sizeof(unsigned char), width * 4 * sizeof(unsigned char), height, cudaMemcpyHostToDevice);
-    stbi_image_free(data);
-    if (err != cudaSuccess) {
-        std::cerr << "CUDA memcpy to array failed: " << cudaGetErrorString(err) << std::endl;
-        cudaFreeArray(cuArray);
-        return 0;
-    }
-
-    allocatedArrays.push_back(cuArray);
-
-    struct cudaResourceDesc resDesc;
-    memset(&resDesc, 0, sizeof(resDesc));
-    resDesc.resType = cudaResourceTypeArray;
-    resDesc.res.array.array = cuArray;
-
-    struct cudaTextureDesc texDesc;
-    memset(&texDesc, 0, sizeof(texDesc));
-    texDesc.addressMode[0] = cudaAddressModeWrap;
-    texDesc.addressMode[1] = cudaAddressModeWrap;
-    texDesc.filterMode = cudaFilterModeLinear;
-    texDesc.readMode = cudaReadModeNormalizedFloat;
-    texDesc.normalizedCoords = 1;
-    texDesc.sRGB = 1; // Convert sRGB texture data to linear space on read
-
-    cudaTextureObject_t texObj = 0;
-    err = cudaCreateTextureObject(&texObj, &resDesc, &texDesc, NULL);
-    if (err != cudaSuccess) {
-        std::cerr << "CUDA create texture object failed: " << cudaGetErrorString(err) << std::endl;
-        return 0;
-    }
-
-    allocatedTextures.push_back(texObj);
-    return texObj;
-}
-
-void FutabaScreen::clearTextures() {
-    for (auto texObj : m_cudaTextureObjects) {
-        if (texObj != 0) {
-            cudaDestroyTextureObject(texObj);
-        }
-    }
-    m_cudaTextureObjects.clear();
-
-    for (auto cuArray : m_cudaTextureArrays) {
-        if (cuArray != nullptr) {
-            cudaFreeArray(cuArray);
-        }
-    }
-    m_cudaTextureArrays.clear();
-}
 
 void FutabaScreen::updateVisualizerDropdown() {
     if (!m_visCombo) return;
@@ -1416,5 +1240,10 @@ void FutabaScreen::updateGuidingUI() {
     }
     
     performLayout();
+}
+
+void FutabaScreen::handleException(const std::exception &e, const std::string &title) {
+    auto dlg = new MessageDialog(this, MessageDialog::Type::Warning, title, e.what());
+    (void)dlg;
 }
 
