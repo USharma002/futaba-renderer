@@ -2,6 +2,17 @@
 #include "types.cuh"
 
 namespace futaba {
+    // Data structure holding CDF tables/arrays for basic emitter sampling
+    struct CDFLightSamplerData {
+        float* emitterTriangleCdf = nullptr;
+        int*   emissiveTriangleIndices = nullptr;
+        int*   emissiveGlobalToIndex = nullptr;
+        int*   nonAreaEmitterIndices = nullptr;
+        int    emissiveTriCount = 0;
+        int    nonAreaEmitterCount = 0;
+        float  emitterTriangleFuncSum = 0.f;
+    };
+
     // Result of one emitter draw for NEE.
     struct EmitterSample {
         Point3f  p;              // Sampled point on the emitter

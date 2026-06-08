@@ -123,7 +123,7 @@ extern "C" __global__ void __raygen__path() {
   Ray3f ray = setup_ray(idx, index, sampler);
 
   Color3f radiance;
-  EmitterSampler light_sampler(params.light_sampler_type);
+  EmitterSampler light_sampler(params.light_sampler_type, params.cdf_sampler_data);
   Path integrator(params.max_depth, params.rr_depth, light_sampler);
 
   if (params.train_active) {
@@ -184,7 +184,7 @@ extern "C" __global__ void __raygen__volpath() {
   Sampler sampler;
   Ray3f ray = setup_ray(idx, index, sampler);
 
-  EmitterSampler light_sampler(params.light_sampler_type);
+  EmitterSampler light_sampler(params.light_sampler_type, params.cdf_sampler_data);
   VolumetricPath integrator(params.max_depth, params.rr_depth, false, light_sampler);
   Color3f radiance = integrator.sample(ray, params.scene, sampler);
 

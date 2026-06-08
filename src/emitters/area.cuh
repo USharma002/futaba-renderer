@@ -14,17 +14,18 @@ struct AreaEmitter {
     HD bool sample(const Scene&              scene,
                    const SurfaceIntersection& ref,
                    const Point3f&             u,
+                   const CDFLightSamplerData& data,
                    EmitterSample&             es) const
     {
         int   local_idx  = -1;
         float du         = 0.f;
         float weight_val = 0.f;
-        sample1D_device(scene.emitterTriangleCdf, scene.emissiveTriCount,
-                        scene.emitterTriangleFuncSum, u.x,
+        sample1D_device(data.emitterTriangleCdf, data.emissiveTriCount,
+                        data.emitterTriangleFuncSum, u.x,
                         local_idx, du, weight_val);
-        if (local_idx < 0 || local_idx >= scene.emissiveTriCount) return false;
+        if (local_idx < 0 || local_idx >= data.emissiveTriCount) return false;
 
-        const int       tri_id = scene.emissiveTriangleIndices[local_idx];
+        const int       tri_id = data.emissiveTriangleIndices[local_idx];
         const Triangle& tri    = scene.triangles[tri_id];
 
         // Shirley's square-to-triangle mapping for uniform area sampling.
@@ -42,10 +43,10 @@ struct AreaEmitter {
         const Vector3f e2 = tri.p2 - tri.p0;
         const Vector3f cross_p = cross(e1, e2);
         const float len_cross = length(cross_p);
-        if (len_cross <= 0.f || scene.emitterTriangleFuncSum <= 0.f) return false;
+        if (len_cross <= 0.f || data.emitterTriangleFuncSum <= 0.f) return false;
 
         const float area = 0.5f * len_cross;
-        const float prob_tri = weight_val / scene.emitterTriangleFuncSum;
+        const float prob_tri = weight_val / data.emitterTriangleFuncSum;
         const float pdf_A    = prob_tri / area;
         if (pdf_A <= 0.f) return false;
 
@@ -75,17 +76,18 @@ struct AreaEmitter {
     HD float pdf(const Scene&   scene,
                  int             emitter_primitive_id,
                  const Vector3f& wi,
-                 float           dist) const
+                 float           dist,
+                 const CDFLightSamplerData& data) const
     {
-        if (!scene.emissiveGlobalToIndex ||
+        if (!data.emissiveGlobalToIndex ||
             emitter_primitive_id >= (int)scene.triangleCount)
             return 0.f;
 
-        const int idx = scene.emissiveGlobalToIndex[emitter_primitive_id];
-        if (idx < 0 || idx >= scene.emissiveTriCount) return 0.f;
+        const int idx = data.emissiveGlobalToIndex[emitter_primitive_id];
+        if (idx < 0 || idx >= data.emissiveTriCount) return 0.f;
 
-        const float prob_tri = scene.emitterTriangleCdf[idx + 1]
-                             - scene.emitterTriangleCdf[idx];
+        const float prob_tri = data.emitterTriangleCdf[idx + 1]
+                             - data.emitterTriangleCdf[idx];
 
         const Triangle& tri = scene.triangles[emitter_primitive_id];
         const Vector3f e1 = tri.p1 - tri.p0;

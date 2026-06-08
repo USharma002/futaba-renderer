@@ -19,23 +19,33 @@ add_subdirectory(ext/nanogui)
 
 add_executable(app 
     main.cpp 
-    src/gui/renderer_host.cpp 
-    src/gui/gui.cpp
-    src/gui/integrator_ui.cpp
-    src/films/bitmap.cpp
-    src/parser/scene_loader.cpp 
-    ext/pugixml/src/pugixml.cpp
+
+    # Core & Acceleration & Guiding & Denoiser
     src/accel/optix_bvh.cu
     src/denoiser/denoiser.cu
     src/guiding/guiding.cpp
     src/guiding/training_buffer.cu
-    src/gui/texture_manager.cpp
-    src/gui/scene_uploader.cpp
-    src/gui/optix_pipeline.cpp
+    src/films/bitmap.cpp
+
+    # Parser
+    ext/pugixml/src/pugixml.cpp
+    src/parser/scene_loader.cpp 
     src/parser/material_builders.cpp
     src/parser/emitter_builders.cpp
+    src/parser/envmap_loader.cpp
+
+    # Emitters & Shapes
     src/shapes/shape_factory.cpp
-    src/emitters/envmap_loader.cpp
+
+    # Renderer
+    src/renderer/renderer_host.cpp
+    src/renderer/texture_manager.cpp
+    src/renderer/scene_uploader.cpp
+    src/renderer/optix_pipeline.cpp
+
+    # GUI
+    src/gui/gui.cpp
+    src/gui/integrator_ui.cpp
 )
 
 add_executable(struct_sizes
@@ -87,6 +97,7 @@ set(APP_INCLUDES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/integrator
     ${CMAKE_CURRENT_SOURCE_DIR}/src/sensors
     ${CMAKE_CURRENT_SOURCE_DIR}/src/gui
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/renderer
     ${CMAKE_CURRENT_SOURCE_DIR}/src/scene
     ${CMAKE_CURRENT_SOURCE_DIR}/src/parser
     ${CMAKE_CURRENT_SOURCE_DIR}/src/shapes
@@ -134,10 +145,10 @@ add_custom_command(
     COMMAND ${CMAKE_CUDA_COMPILER} --ptx -std=c++17 -O3 --use_fast_math
             -DFUTABA_OPTIX_DEVICE_PROGRAMS
             ${NVCC_INCLUDES}
-            "${CMAKE_CURRENT_SOURCE_DIR}/src/gui/renderer_device.cu"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/renderer/renderer_device.cu"
             -o "${PTX_FILE}"
-    DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/gui/renderer_device.cu"
-            "${CMAKE_CURRENT_SOURCE_DIR}/src/gui/launch_params.h"
+    DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/renderer/renderer_device.cu"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/renderer/launch_params.h"
             "${CMAKE_CURRENT_SOURCE_DIR}/src/guiding/guiding.h"
             "${CMAKE_CURRENT_SOURCE_DIR}/src/guiding/ppg/adam.cuh"
             "${CMAKE_CURRENT_SOURCE_DIR}/src/guiding/guiding_device.cuh"

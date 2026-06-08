@@ -37,14 +37,17 @@ namespace futaba {
 //    - If emitter_primitive_id is -1, evaluates the PDF for environment map.
 // ---------------------------------------------------------------------------
 struct UniformEmitterSampler {
+    CDFLightSamplerData data;
+
+    HD explicit UniformEmitterSampler(const CDFLightSamplerData& d) : data(d) {}
 
     HD bool sample(const Scene&              scene,
                    const SurfaceIntersection& ref,
                    const Point3f&             u,
                    EmitterSample&             es) const
     {
-        const bool have_area = (scene.emissiveTriCount > 0);
-        const bool have_nonarea = (scene.nonAreaEmitterCount > 0 && scene.nonAreaEmitterIndices != nullptr);
+        const bool have_area = (data.emissiveTriCount > 0);
+        const bool have_nonarea = (data.nonAreaEmitterCount > 0 && data.nonAreaEmitterIndices != nullptr);
         const bool have_env  = scene.envMap.isActive();
 
         int num_categories = 0;
@@ -66,7 +69,7 @@ struct UniformEmitterSampler {
         if (have_area) {
             if (current_cat == cat_idx) {
                 AreaEmitter area_emitter;
-                if (!area_emitter.sample(scene, ref, new_u, es)) return false;
+                if (!area_emitter.sample(scene, ref, new_u, data, es)) return false;
                 es.pdf *= select_prob;
                 return true;
             }
@@ -99,8 +102,8 @@ struct UniformEmitterSampler {
                  const Vector3f& wi,
                  float           dist) const
     {
-        const bool have_area = (scene.emissiveTriCount > 0);
-        const bool have_nonarea = (scene.nonAreaEmitterCount > 0 && scene.nonAreaEmitterIndices != nullptr);
+        const bool have_area = (data.emissiveTriCount > 0);
+        const bool have_nonarea = (data.nonAreaEmitterCount > 0 && data.nonAreaEmitterIndices != nullptr);
         const bool have_env  = scene.envMap.isActive();
 
         int num_categories = 0;
@@ -120,7 +123,7 @@ struct UniformEmitterSampler {
 
         if (have_area) {
             AreaEmitter area_emitter;
-            return select_prob * area_emitter.pdf(scene, emitter_primitive_id, wi, dist);
+            return select_prob * area_emitter.pdf(scene, emitter_primitive_id, wi, dist, data);
         }
 
         return 0.f;
@@ -133,9 +136,9 @@ private:
                             const Point3f& u,
                             EmitterSample& es) const
     {
-        int sel = (int)(u.x * (float)scene.nonAreaEmitterCount);
-        if (sel > scene.nonAreaEmitterCount - 1) sel = scene.nonAreaEmitterCount - 1;
-        const int eid = scene.nonAreaEmitterIndices[sel];
+        int sel = (int)(u.x * (float)data.nonAreaEmitterCount);
+        if (sel > data.nonAreaEmitterCount - 1) sel = data.nonAreaEmitterCount - 1;
+        const int eid = data.nonAreaEmitterIndices[sel];
         if (eid < 0 || (uint32_t)eid >= scene.emitterCount) return false;
 
         const EmitterGPU& em = scene.emitters[eid];
@@ -173,8 +176,9 @@ private:
 
 struct EmitterSampler {
     int type;
+    CDFLightSamplerData cdf_data;
 
-    HD explicit EmitterSampler(int t = LIGHT_SAMPLER_UNIFORM) : type(t) {}
+    HD explicit EmitterSampler(int t = LIGHT_SAMPLER_UNIFORM, CDFLightSamplerData d = {}) : type(t), cdf_data(d) {}
 
     HD bool sample(const Scene&              scene,
                    const SurfaceIntersection& ref,
@@ -182,7 +186,7 @@ struct EmitterSampler {
                    EmitterSample&             es) const
     {
         if (type == LIGHT_SAMPLER_UNIFORM) {
-            return UniformEmitterSampler{}.sample(scene, ref, u, es);
+            return UniformEmitterSampler{cdf_data}.sample(scene, ref, u, es);
         } else if (type == LIGHT_SAMPLER_POWER) {
             return PowerEmitterSampler{}.sample(scene, ref, u, es);
         }
@@ -195,7 +199,7 @@ struct EmitterSampler {
                  float           dist) const
     {
         if (type == LIGHT_SAMPLER_UNIFORM) {
-            return UniformEmitterSampler{}.pdf(scene, emitter_primitive_id, wi, dist);
+            return UniformEmitterSampler{cdf_data}.pdf(scene, emitter_primitive_id, wi, dist);
         } else if (type == LIGHT_SAMPLER_POWER) {
             return PowerEmitterSampler{}.pdf(scene, emitter_primitive_id, wi, dist);
         }

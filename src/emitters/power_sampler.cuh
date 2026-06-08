@@ -13,12 +13,12 @@ namespace futaba {
 // 1. Define custom internal sampling logic here or in a new header.
 // 2. To register a new sampler type:
 //    - Add the new sampler struct.
-//    - Add a variant to LightSamplerType in src/gui/launch_params.h.
+//    - Add a variant to LightSamplerType in src/renderer/launch_params.h.
 //    - Add a selection option to the ComboBox in src/gui/gui.cpp.
-//    - Add corresponding __raygen__ kernel(s) in src/gui/renderer_device.cu
+//    - Add corresponding __raygen__ kernel(s) in src/renderer/renderer_device.cu
 //      instantiating Path<YourSampler> / VolumetricPath<YourSampler>.
 //    - Register the new raygen program group(s) and SBT record(s) in
-//      src/gui/renderer_host.cpp, updating the index selection in launch_render.
+//      src/renderer/renderer_host.cpp, updating the index selection in launch_render.
 // ---------------------------------------------------------------------------
 struct PowerEmitterSampler {
 

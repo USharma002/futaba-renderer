@@ -3,6 +3,7 @@
 #include "types.cuh"
 #include "perspective.cuh"
 #include "scene.cuh"
+#include "emitter_sample.cuh"
 #include "guiding.h"
 
 namespace futaba {
@@ -43,6 +44,8 @@ struct LaunchParams {
     int integrator_mode;
     int tonemapping_mode;
     int light_sampler_type;
+    CDFLightSamplerData cdf_sampler_data;
+    void* light_sampler_data = nullptr;
     Vector3f phong_light_dir;
     float phong_ambient;
     float phong_diffuse;

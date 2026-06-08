@@ -812,6 +812,13 @@ void FutabaScreen::renderLoop() {
             params.denoise_active = m_useDenoiser;
             params.path_guiding_mode = m_pathGuidingMode;
             params.light_sampler_type = m_lightSamplerType;
+            params.cdf_sampler_data.emitterTriangleCdf = m_scene.emitterTriangleCdf;
+            params.cdf_sampler_data.emissiveTriangleIndices = m_scene.emissiveTriangleIndices;
+            params.cdf_sampler_data.emissiveGlobalToIndex = m_scene.emissiveGlobalToIndex;
+            params.cdf_sampler_data.nonAreaEmitterIndices = m_scene.nonAreaEmitterIndices;
+            params.cdf_sampler_data.emissiveTriCount = m_scene.emissiveTriCount;
+            params.cdf_sampler_data.nonAreaEmitterCount = m_scene.nonAreaEmitterCount;
+            params.cdf_sampler_data.emitterTriangleFuncSum = m_scene.emitterTriangleFuncSum;
 
             auto activeInt = IntegratorRegistry::getIntegrator(m_integratorMode);
             if (activeInt) {
