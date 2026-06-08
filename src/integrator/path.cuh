@@ -13,8 +13,6 @@
 
 namespace futaba {
 
-
-
 struct Path {
     int             max_depth;
     int             rr_depth;
@@ -22,9 +20,6 @@ struct Path {
 
     HD explicit Path(int max_d = 12, int rr_d = 5, EmitterSampler sampler = EmitterSampler())
         : max_depth(max_d), rr_depth(rr_d), emitter_sampler(sampler) {}
-
-
-
 
 
     template<bool RecordTraining = false, bool RecordDenoiseGuides = false>

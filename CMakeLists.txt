@@ -29,6 +29,13 @@ add_executable(app
     src/denoiser/denoiser.cu
     src/guiding/guiding.cpp
     src/guiding/training_buffer.cu
+    src/gui/texture_manager.cpp
+    src/gui/scene_uploader.cpp
+    src/gui/optix_pipeline.cpp
+    src/parser/material_builders.cpp
+    src/parser/emitter_builders.cpp
+    src/shapes/shape_factory.cpp
+    src/emitters/envmap_loader.cpp
 )
 
 add_executable(struct_sizes
