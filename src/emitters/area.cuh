@@ -46,7 +46,7 @@ struct AreaEmitter {
         if (len_cross <= 0.f || data.emitterTriangleFuncSum <= 0.f) return false;
 
         const float area = 0.5f * len_cross;
-        const float prob_tri = weight_val / data.emitterTriangleFuncSum;
+        const float prob_tri = weight_val;
         const float pdf_A    = prob_tri / area;
         if (pdf_A <= 0.f) return false;
 

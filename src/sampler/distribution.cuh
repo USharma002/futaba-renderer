@@ -82,10 +82,10 @@ HD void sample1D_device(const float* cdf, int n, float funcSum, float u, int &in
     float c1 = cdf[index+1];
     if (c1 - c0 <= 0.f) {
         du = 0.f;
-        pdf = (funcSum > 0.f) ? (1.f / float(n)) : 0.f;
+        pdf = 1.f / float(n);
     } else {
         du = (u - c0) / (c1 - c0);
-        pdf = (funcSum > 0.f) ? ((c1 - c0) * funcSum) : 0.f;
+        pdf = c1 - c0;
     }
 }
 
