@@ -166,7 +166,7 @@ struct Path {
 
             // Russian roulette stopping probability
             if (depth >= rr_depth) {
-                const float rr_prob = fminf(max_beta * eta * eta, 0.95f);
+                const float rr_prob = fminf(max_beta / (eta * eta), 0.95f);
                 if (sampler.next1D() >= rr_prob) break;
                 beta = beta / rr_prob;
             }

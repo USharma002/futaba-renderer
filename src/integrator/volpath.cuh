@@ -157,10 +157,10 @@ struct VolumetricPath {
             float beta_max = fmaxf(beta.x, fmaxf(beta.y, beta.z));
             if (beta_max <= 0.f) break;
 
-            float rr_prob = fminf(beta_max * eta * eta, 0.95f);
             if (depth >= rr_depth) {
-                beta *= 1.f / rr_prob;
+                float rr_prob = fminf(beta_max / (eta * eta), 0.95f);
                 if (sampler.next1D() >= rr_prob) break;
+                beta *= 1.f / rr_prob;
             }
         }
 
