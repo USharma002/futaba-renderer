@@ -92,7 +92,9 @@ Material make_roughdielectric_material(const PropertyList& bsdfProps,
     const float ior    = bsdfProps.getFloat("intIOR",
                          bsdfProps.getFloat("int_ior",
                          bsdfProps.getFloat("ior", 1.5f)));
-    Material mat(albedo, emission, BSDF_ID_ROUGHDIELECTRIC, extIor, ior, bsdfProps.getFloat("roughness", 0.1f));
+    const float alpha  = bsdfProps.getFloat("alpha",
+                         bsdfProps.getFloat("roughness", 0.1f));
+    Material mat(albedo, emission, BSDF_ID_ROUGHDIELECTRIC, extIor, ior, alpha);
     return mat;
 }
 
@@ -100,7 +102,7 @@ Material make_roughconductor_material(const PropertyList& bsdfProps,
                                       const PropertyList& emitterProps)
 {
     const Color3f emission = emitterProps.getColor("radiance",
-                             emitterProps.getColor("emission", Color3f(0.f, 0.f, 0.f)));
+                             emitterProps.getColor("emission", Color3f(0.f)));
     
     Color3f defaultEta(0.f);
     Color3f defaultK(0.f);
@@ -118,8 +120,12 @@ Material make_roughconductor_material(const PropertyList& bsdfProps,
         defaultEta = Color3f(1.34138f, 0.96602f, 0.61805f);
         defaultK   = Color3f(7.33748f, 6.096f, 4.80216f);
     } else if (material == "silver" || material == "ag") {
-        defaultEta = Color3f(0.05518f, 0.11728f, 1.1394f);
-        defaultK   = Color3f(3.9015f, 2.45f, 2.14f);
+        // Corrected Palik optical data for Ag at R(650nm) / G(550nm) / B(450nm).
+        // Old values had eta.z=1.1394, k.z=2.14 which gives only ~50% Fresnel reflectance
+        // in the blue channel, causing a strong warm/yellow tint. Correct blue-channel
+        // values give ~95%, making silver nearly achromatic (98.9% / 98.6% / 95.0%).
+        defaultEta = Color3f(0.048f, 0.050f, 0.070f);
+        defaultK   = Color3f(4.10f,  3.60f,  2.65f);
     }
     
     const Color3f eta = bsdfProps.getColor("eta", defaultEta);

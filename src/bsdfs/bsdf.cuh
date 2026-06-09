@@ -22,6 +22,11 @@ struct BSDF {
 
     // Evaluate the albedo (including texture lookup if applicable)
     HD static Color3f get_albedo(const Material& mat, const SurfaceIntersection& si) {
+        // Conductors store their surface colour in mat.specular (the specular_reflectance /
+        // Fresnel scale), not in mat.albedo (which is always zero for conductors).
+        if (mat.type == BSDF_ID_ROUGHCONDUCTOR) {
+            return mat.specular;
+        }
         Color3f albedo = mat.albedo;
 #ifdef __CUDA_ARCH__
         if (mat.texObj != 0) {

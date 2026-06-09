@@ -168,6 +168,16 @@ add_custom_command(
             "${CMAKE_CURRENT_SOURCE_DIR}/src/phase/isotropic.cuh"
             "${CMAKE_CURRENT_SOURCE_DIR}/src/medium/medium.cuh"
             "${CMAKE_CURRENT_SOURCE_DIR}/src/medium/homogeneous.cuh"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/bsdfs/bsdf.cuh"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/bsdfs/bsdf_sample.cuh"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/bsdfs/dielectric.cuh"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/bsdfs/diffuse.cuh"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/bsdfs/microfacet.cuh"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/bsdfs/mirror.cuh"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/bsdfs/roughconductor.cuh"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/bsdfs/roughdielectric.cuh"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/bsdfs/roughplastic.cuh"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/bsdfs/thindielectric.cuh"
 )
 add_custom_target(compile_ptx DEPENDS "${PTX_FILE}")
 add_dependencies(app compile_ptx)

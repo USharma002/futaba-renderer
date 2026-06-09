@@ -20,9 +20,11 @@ struct RoughDielectric {
         : albedo(tint), alpha(fmaxf(roughness, 1e-4f)), extIOR(extIor), intIOR(intIor) {}
 
     // G1 that works for both reflection (v.z > 0) and transmission (v.z < 0) lobes.
-    // For transmission wo lives below the surface, so we pass |cosTheta| and flip wh accordingly.
+    // smithBeckmannG1 requires v.z > 0, so for the transmission wo (below the surface)
+    // we flip both v and wh into the upper hemisphere together.
     HD static float G1(const Vector3f& v, const Vector3f& wh, float alpha) {
-        return Warp::smithBeckmannG1(v, wh * (v.z < 0.f ? -1.f : 1.f), alpha);
+        const float sign = (v.z < 0.f) ? -1.f : 1.f;
+        return Warp::smithBeckmannG1(v * sign, wh, alpha);
     }
 
     HD Color3f eval(const BSDFSample& bs) const {
@@ -50,7 +52,7 @@ struct RoughDielectric {
         const float D = Warp::beckmannD(wh, alpha);
         if (D <= 0.f) return Color3f(0.f);
 
-        const float F = fresnel(whDotWi, extIOR, intIOR);
+        const float F = fresnel(whDotWi, etaI, etaT);
         const float G = G1(bs.wi, wh, alpha) * G1(bs.wo, wh, alpha);
 
         if (reflect) {
@@ -58,7 +60,7 @@ struct RoughDielectric {
         } else {
             const float whDotWo = dot(wh, bs.wo);
             const float denom   = etaI * whDotWi + etaT * whDotWo;
-            const float factor  = (etaT * etaT * fabsf(whDotWi) * fabsf(whDotWo)) /
+            const float factor  = (etaI * etaI * fabsf(whDotWi) * fabsf(whDotWo)) /
                                   fmaxf(denom * denom * cosThetaI * fabsf(cosThetaO), 1e-8f);
             return albedo * Color3f((1.f - F) * D * G * factor);
         }
@@ -86,7 +88,7 @@ struct RoughDielectric {
         const float whDotWi = dot(wh, bs.wi);
         if (whDotWi <= 0.f) return 0.f;
 
-        const float F   = fresnel(whDotWi, extIOR, intIOR);
+        const float F   = fresnel(whDotWi, etaI, etaT);
         const float pWh = Warp::squareToBeckmannPdf(wh, alpha);
 
         if (reflect) {
@@ -111,9 +113,9 @@ struct RoughDielectric {
             bs.pdf = 0.f; bs.weight = Color3f(0.f); return Color3f(0.f);
         }
 
-        const float F  = fresnel(whDotWi, extIOR, intIOR);
         float etaI     = bs.front_face ? extIOR : intIOR;
         float etaT     = bs.front_face ? intIOR : extIOR;
+        const float F  = fresnel(whDotWi, etaI, etaT);
         float eta      = etaI / etaT;
 
         const float sinT2 = eta * eta * fmaxf(0.f, 1.f - whDotWi * whDotWi);
