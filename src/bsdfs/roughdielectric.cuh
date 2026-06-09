@@ -19,9 +19,8 @@ struct RoughDielectric {
     HD RoughDielectric(const Color3f& tint, float roughness, float extIor, float intIor)
         : albedo(tint), alpha(fmaxf(roughness, 1e-4f)), extIOR(extIor), intIOR(intIor) {}
 
-    // G1 that works for both reflection (v.z > 0) and transmission (v.z < 0) lobes.
-    // smithBeckmannG1 requires v.z > 0, so for the transmission wo (below the surface)
-    // we flip both v and wh into the upper hemisphere together.
+    // Masking function supporting both reflection and transmission.
+    // Flips transmissive directions to the upper hemisphere.
     HD static float G1(const Vector3f& v, const Vector3f& wh, float alpha) {
         const float sign = (v.z < 0.f) ? -1.f : 1.f;
         return Warp::smithBeckmannG1(v * sign, wh, alpha);

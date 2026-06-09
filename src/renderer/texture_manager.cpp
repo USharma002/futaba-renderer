@@ -7,7 +7,9 @@ namespace futaba {
 
 cudaTextureObject_t TextureManager::createTexture(const std::string& filename) {
     int width = 0, height = 0, channels = 0;
+    stbi_set_flip_vertically_on_load(true);
     unsigned char* data = stbi_load(filename.c_str(), &width, &height, &channels, 4); // load as RGBA
+    stbi_set_flip_vertically_on_load(false);
     if (!data) {
         std::cerr << "Failed to load texture: " << filename << std::endl;
         return 0;
