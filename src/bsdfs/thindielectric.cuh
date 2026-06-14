@@ -24,6 +24,9 @@ struct ThinDielectric {
         float cosI = Frame::cos_theta(bs.wi);
         float Fr   = fresnel(cosI, etaI, etaT);
 
+        // Account for internal reflections inside the thin slab
+        Fr *= 2.f / (1.f + Fr);
+
         // Reflect
         if (s2.x < Fr) {
             bs.wo           = Vector3f(-bs.wi.x, -bs.wi.y, bs.wi.z);

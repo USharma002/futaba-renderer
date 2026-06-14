@@ -4,6 +4,7 @@
 #include "warp.cuh"
 #include "frame.cuh"
 #include "common.cuh"
+#include "sampler.cuh"
 
 namespace futaba {
 
@@ -120,13 +121,24 @@ struct RoughDielectric {
         const float sinT2 = eta * eta * fmaxf(0.f, 1.f - whDotWi * whDotWi);
         const bool  tir   = (sinT2 >= 1.f);
 
-        if (tir || F >= 1.f - 1e-6f) {
+        // Generate a pseudo-random value using a hash of the coordinates s2.x and s2.y,
+        // which serves as the 1D sample for the reflection/refraction decision.
+        union { float f; uint32_t u; } ux, uy;
+        ux.f = s2.x;
+        uy.f = s2.y;
+        uint64_t seed = (static_cast<uint64_t>(ux.u) << 32) | uy.u;
+        pcg32 rng(seed);
+        const float sample1 = rng.nextFloat();
+
+        bool sample_reflect = tir || (sample1 <= F);
+
+        if (sample_reflect) {
             // Reflect (includes TIR)
             bs.wo = -bs.wi + 2.f * whDotWi * wh;
             if (Frame::cos_theta(bs.wo) <= 0.f) {
                 bs.pdf = 0.f; bs.weight = Color3f(0.f); return Color3f(0.f);
             }
-            bs.pdf          = Warp::squareToBeckmannPdf(wh, alpha) / fmaxf(4.f * whDotWi, 1e-8f);
+            bs.pdf          = F * Warp::squareToBeckmannPdf(wh, alpha) / fmaxf(4.f * whDotWi, 1e-8f);
             bs.eta          = 1.f;
             bs.sampled_type = BSDF_ID_ROUGHDIELECTRIC;
         } else {
