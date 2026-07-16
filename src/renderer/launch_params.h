@@ -4,9 +4,8 @@
 #include "perspective.cuh"
 #include "scene.cuh"
 #include "emitter_sample.cuh"
-#include "guiding.h"
 
-namespace futaba {
+FUTABA_NAMESPACE_BEGIN
 
 enum IntegratorMode {
     INTEGRATOR_PATH = 0,
@@ -15,13 +14,11 @@ enum IntegratorMode {
     INTEGRATOR_ALBEDO = 3,
     INTEGRATOR_PHONG = 4,
     INTEGRATOR_PRIMITIVES = 5,
-    INTEGRATOR_HEATMAP = 6,
-    INTEGRATOR_VOLPATH = 7
+    INTEGRATOR_HEATMAP = 6
 };
 
 enum LightSamplerType {
-    LIGHT_SAMPLER_UNIFORM = 0,
-    LIGHT_SAMPLER_POWER = 1
+    LIGHT_SAMPLER_POWER = 0
 };
 
 enum TonemappingMode {
@@ -29,6 +26,28 @@ enum TonemappingMode {
     TONEMAPPING_ACES = 1,
     TONEMAPPING_REINHARD = 2,
     TONEMAPPING_FILMIC = 3
+};
+
+// Debug-integrator params. Only read by the Phong integrator.
+struct PhongParams {
+    Vector3f light_dir;
+    float    ambient;
+    float    diffuse;
+    float    specular;
+    float    shininess;
+};
+
+// Denoiser guide buffers: filled by PathRecorder during the path integrator's
+// first bounce, consumed by the OptiX denoiser after the frame is rendered.
+struct DenoiseParams {
+    bool     active = false;
+    Color3f* albedo_buffer = nullptr;
+    Color3f* normal_buffer = nullptr;
+};
+
+struct LightSamplerData {
+    int type;
+    CDFLightSamplerData cdf;
 };
 
 struct LaunchParams {
@@ -43,39 +62,10 @@ struct LaunchParams {
     int rr_depth;
     int integrator_mode;
     int tonemapping_mode;
-    int light_sampler_type;
-    CDFLightSamplerData cdf_sampler_data;
-    void* light_sampler_data = nullptr;
-    Vector3f phong_light_dir;
-    float phong_ambient;
-    float phong_diffuse;
-    float phong_specular;
-    float phong_shininess;
+    LightSamplerData light_sampler;
     bool use_antialiasing;
-    bool denoise_active;
-    Color3f* denoise_albedo_buffer;
-    Color3f* denoise_normal_buffer;
-    int path_guiding_mode;
-    STreeNode* sTreeNodes;
-    AABB       sTreeAABB;
-    float      bsdf_sampling_fraction;
-    int        ppg_distribution_mode;
-
-    // Training buffers (shape: max_depth x height x width)
-    float* train_active;
-    Point3f* train_position;
-    Color3f* train_normals;
-    Color3f* train_wi;
-    Color3f* train_wo;
-    Color3f* train_radiance;
-    float* train_direction_pdf;
-    float* train_material_id;
-
-    // Visualization parameters
-    uchar4* vis_pbo_ptr;
-    int vis_depth;
-    int vis_buffer_type;
-    bool vis_active;
+    PhongParams phong;
+    DenoiseParams denoise;
 };
 
-} // namespace futaba
+FUTABA_NAMESPACE_END

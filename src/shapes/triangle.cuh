@@ -1,22 +1,23 @@
 #pragma once
-
 #include "common.cuh"
-#include "ray.cuh"
-#include "diffuse.cuh"
 #include "surface_interaction.cuh"
+#include "bbox.cuh"
+#include "warp.cuh"
 
-namespace futaba {
+FUTABA_NAMESPACE_BEGIN
 
 struct Triangle {    
     // Material and shape IDs for intersection record
     int material_id;          // Material ID (4 bytes)
     int mesh_id = -1;         // Mesh ID (4 bytes)
-    bool has_normals = false; // Whether the triangle has vertex normals (1 byte, but will be padded to 4 bytes)
+    
+    bool has_normals = false; // Whether the triangle has vertex normals
     bool has_uvs = false;     // Whether the triangle has vertex UV coordinates
-    Point2f uv0 = Point2f(0.f); // UV coordinates for vertex 0 (8 bytes)
-    Point2f uv1 = Point2f(0.f); // UV coordinates for vertex 1 (8 bytes)
-    Point2f uv2 = Point2f(0.f); // UV coordinates for vertex 2 (8 bytes)
-
+    
+    Point2f uv0 = Point2f(0.f); // UV coordinates for vertex 0
+    Point2f uv1 = Point2f(0.f); // UV coordinates for vertex 1
+    Point2f uv2 = Point2f(0.f); // UV coordinates for vertex 2
+    
     // Triangle vertices and normals in world space
     Point3f p0;
     Point3f p1;
@@ -26,31 +27,19 @@ struct Triangle {
     Vector3f n1;
     Vector3f n2;
 
-
     HD bool intersect(const Ray& r, float t_min, float t_max, SurfaceIntersection& rec, bool use_vertex_normals, int primitive_id = -1) const {
-        // Möller-Trumbore ray-triangle intersection algorithm
         Vector3f edge1 = p1 - p0;
         Vector3f edge2 = p2 - p0;
-
         Vector3f pvec = cross(r.d, edge2);
-
-        // If the determinant is near zero, the ray lies in the plane of the triangle
         float det = dot(edge1, pvec);
         if (det > -1e-8f && det < 1e-8f) return false;
-
         float inv_det = 1.0f / det;
         Vector3f tvec = r.o - p0;
-
-        // If u is outside the triangle, return false
         float u = dot(tvec, pvec) * inv_det;
         if (u < 0.0f || u > 1.0f) return false;
-
-        // If v is outside the triangle, return false
         Vector3f qvec = cross(tvec, edge1);
         float v = dot(r.d, qvec) * inv_det;
         if (v < 0.0f || u + v > 1.0f) return false;
-
-        // Compute t to find out where the intersection point is on the line
         float t = dot(edge2, qvec) * inv_det;
         if (t < t_min || t > t_max) return false;
         populate_intersection(r, t, u, v, rec, use_vertex_normals, primitive_id);
@@ -60,7 +49,6 @@ struct Triangle {
     HD void populate_intersection(const Ray& r, float t, float u, float v, SurfaceIntersection& rec, bool use_vertex_normals, int primitive_id = -1) const {
         rec.t = t;
         rec.p = r(rec.t);
-        
         Vector3f edge1 = p1 - p0;
         Vector3f edge2 = p2 - p0;
         Vector3f face_n = normalize(cross(edge1, edge2));
@@ -70,12 +58,10 @@ struct Triangle {
         } else {
             rec.n = face_n;
         }
-
         rec.wi = -r.d;
         rec.shape_id = mesh_id;
         rec.material_id = material_id;
         rec.primitive_id = primitive_id;
-        
         rec.front_face = dot(r.d, face_n) < 0.0f;
         if (has_uvs) {
             float w = 1.0f - u - v;
@@ -90,24 +76,25 @@ struct Triangle {
         rec.set_frame_from_normal(frame_n);
     }
 
-    // Compute the area of the triangle (used for importance sampling)
-    HD float area() const {
-        return 0.5f * length(cross(p1 - p0, p2 - p0));
-    }
-
-    // Uniformly sample a point on the triangle's surface using barycentric coordinates
     HD Point3f sampleSurface(const Point2f& s) const {
-        float sqrt_u = sqrtf(s.x);
-        float u = 1.0f - sqrt_u;
-        float v = s.y * sqrt_u;
-        return p0 + u * (p1 - p0) + v * (p2 - p0);
+        Point2f bary = Warp::squareToUniformTriangle(s);
+        return p0 + bary.x * (p1 - p0) + bary.y * (p2 - p0);
     }
 
-    // PDF for uniform sampling on the triangle's surface
-    HD float pdfSurface() const {
-        return 1.0f / area();
+    HD AABB bounds() const {
+        AABB b;
+        b.expand(p0);
+        b.expand(p1);
+        b.expand(p2);
+        return b;
     }
 
+    HD Point3f centroid() const {
+        return Point3f((p0.x + p1.x + p2.x) / 3.0f,
+                       (p0.y + p1.y + p2.y) / 3.0f,
+                       (p0.z + p1.z + p2.z) / 3.0f);
+    }
 };
 
-} // namespace futaba
+
+FUTABA_NAMESPACE_END

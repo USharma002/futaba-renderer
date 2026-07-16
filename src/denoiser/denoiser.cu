@@ -4,7 +4,7 @@
 #include <optix_stubs.h>
 #include <iostream>
 
-namespace futaba {
+FUTABA_NAMESPACE_BEGIN
 
 // Preparation kernel to divide accumulated color/albedo/normal values by sampleCount
 __global__ void prepare_denoiser_input_kernel(
@@ -257,4 +257,4 @@ void DenoiserManager::destroy() {
     if (m_dOutputBeauty) { cudaFree(m_dOutputBeauty); m_dOutputBeauty = nullptr; }
 }
 
-} // namespace futaba
+FUTABA_NAMESPACE_END

@@ -2,7 +2,7 @@
 #include <cctype>
 #include <algorithm>
 
-namespace futaba {
+FUTABA_NAMESPACE_BEGIN
 
 Material make_diffuse_material(const PropertyList& bsdfProps,
                               const PropertyList& emitterProps)
@@ -216,4 +216,4 @@ Material makeMaterialFromPropertyLists(const PropertyList& bsdfProps,
     return makeMaterialFromPropertyLists(bsdfProps, emitterProps, sink);
 }
 
-} // namespace futaba
+FUTABA_NAMESPACE_END

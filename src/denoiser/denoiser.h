@@ -4,7 +4,7 @@
 #include <cuda_runtime.h>
 #include "types.cuh"
 
-namespace futaba {
+FUTABA_NAMESPACE_BEGIN
 
 extern void initOptix();
 extern OptixDeviceContext getOptixContext();
@@ -61,4 +61,4 @@ private:
     float4* m_dOutputBeauty;  // float3 or float4 denoised beauty
 };
 
-} // namespace futaba
+FUTABA_NAMESPACE_END

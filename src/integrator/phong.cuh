@@ -9,7 +9,7 @@
 #include "bsdf.cuh"
 
 
-namespace futaba {
+FUTABA_NAMESPACE_BEGIN
 
 struct Phong {
   Vector3f lightDir;
@@ -52,13 +52,13 @@ struct Phong {
   }
 };
 
-} // namespace futaba
+FUTABA_NAMESPACE_END
 
 #if !defined(__CUDACC__) && defined(NANOGUI_GLAD)
 #include "integrator_ui.h"
 #include <nanogui/nanogui.h>
 
-namespace futaba {
+FUTABA_NAMESPACE_BEGIN
 
 class PhongIntegratorUI : public IntegratorUI {
 public:
@@ -102,11 +102,11 @@ public:
     }
 
     void updateLaunchParams(LaunchParams& params) const override {
-        params.phong_light_dir = m_lightDir;
-        params.phong_ambient = m_ambient;
-        params.phong_diffuse = m_diffuse;
-        params.phong_specular = m_specular;
-        params.phong_shininess = m_shininess;
+        params.phong.light_dir = m_lightDir;
+        params.phong.ambient = m_ambient;
+        params.phong.diffuse = m_diffuse;
+        params.phong.specular = m_specular;
+        params.phong.shininess = m_shininess;
     }
 
 private:
@@ -117,5 +117,5 @@ private:
     float m_shininess;
 };
 
-} // namespace futaba
+FUTABA_NAMESPACE_END
 #endif

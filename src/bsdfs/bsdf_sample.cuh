@@ -11,7 +11,7 @@
 //  3. weight encodes  f(wi,wo) * |cos_theta(wo)| / pdf  - multiply path
 //     throughput directly by weight; do NOT apply an extra cosine.
 
-namespace futaba {
+FUTABA_NAMESPACE_BEGIN
 
 struct BSDFSample {
     Vector3f wo;           // Sampled outgoing direction (local frame)
@@ -29,4 +29,4 @@ struct BSDFSample {
     HD bool is_valid() const { return pdf > 0.f; }
 };
 
-} // namespace futaba
+FUTABA_NAMESPACE_END

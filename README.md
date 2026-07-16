@@ -54,7 +54,6 @@ Futaba is a high-performance, learning-oriented physically-based renderer writte
     ![Intersection Heatmap](assets/dragon-cbox-heatmap.png)
 - [x] **Films**: 32-bit HDR accumulation with zero-copy OpenGL PBO display and EXR export support.
 - [x] **Denoising**: Optional OptiX AI denoiser with albedo/normal guide buffers and tonemapped output.
-- [x] **Path guiding** selector (None / SD-Tree PPG) with dedicated guiding controls panel
 
 
 #### Denoising Demo
@@ -67,13 +66,13 @@ Futaba is a high-performance, learning-oriented physically-based renderer writte
 
 - [x] Path tracing with Russian Roulette
 - [x] Next Event Estimation with MIS
-- [x] Volumetric path tracing (homogeneous media, HG phase function)
+- [ ] Volumetric path tracing (homogeneous media, HG phase function)
 - [x] Environment map emitter with importance sampling
 - [x] Thin-lens depth of field
 - [x] Image textures on materials
 - [x] Rough conductor / dielectric / plastic BSDFs (Beckmann microfacet)
 - [x] OptiX AI denoising with guide buffers
-- [x] Path Guiding (PPG)
+- [ ] Path Guiding (PPG)
 - [ ] Bidirectional path tracing
 - [ ] Photon mapping
 - [ ] Disney principled BSDF
@@ -88,11 +87,10 @@ Futaba is a high-performance, learning-oriented physically-based renderer writte
 
 1. **Sensor** --- generates primary rays on the GPU from the perspective camera, with optional thin-lens DoF and subpixel jitter for anti-aliasing
 2. **OptiX Ray Tracing** --- dispatches rays through `__raygen__` / `__closesthit__` / `__miss__` programs using hardware RT cores
-3. **Integrator** --- CUDA kernel computes radiance; selects path tracer, volumetric path tracer, or visualization mode
+3. **Integrator** --- CUDA kernel computes radiance; selects path tracer or visualization mode
 4. **BSDF** --- GPU-side material dispatch evaluates and samples the appropriate lobe (diffuse, microfacet, dielectric, etc.)
 5. **Emitter Sampling** --- NEE samples area lights, point/directional lights, and environment map; MIS weights combine with BSDF sample
-6. **Path Guiding** --- SD-Tree records training data per bounce; after each iteration, the quadtrees are refined and uploaded back to device for the next pass
-7. **Film** --- samples accumulate into a 32-bit float PBO for zero-copy OpenGL display; denoiser reads albedo/normal guide buffers and writes tonemapped output
+6. **Film** --- samples accumulate into a 32-bit float PBO for zero-copy OpenGL display; denoiser reads albedo/normal guide buffers and writes tonemapped output
 
 ```mermaid
 %%{init: {'flowchart': {'curve': 'linear'}}}%%
@@ -117,7 +115,7 @@ CAM[PerspectiveCamera]:::gpu
 INTG[Integrator]:::gpu
 FILM[HDRFilm]:::data
 DENOISE[DenoiserManager]:::gpu
-GUIDE[Guiding & Training Buffer]:::data
+RECORDER[PathRecorder\n(Denoiser Guide Buffers)]:::data
 
 BVH[BVH / Nodes]:::data
 TRIS[Geometry]:::data
@@ -144,8 +142,8 @@ KERNEL --> CAM
 KERNEL --> INTG
 
 INTG -->|Query & Shade| SGPU
-INTG -->|Records Path Data| GUIDE
-GUIDE -->|Guides Rays| INTG
+INTG -->|Writes 1st-bounce albedo/normal| RECORDER
+RECORDER -->|Feeds| DENOISE
 
 KERNEL -->|Accumulate| FILM
 FS -->|Executes Denoising| DENOISE

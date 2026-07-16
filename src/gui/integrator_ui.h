@@ -6,7 +6,7 @@
 #include <nanogui/nanogui.h>
 #include "launch_params.h"
 
-namespace futaba {
+FUTABA_NAMESPACE_BEGIN
 
 class IntegratorUI {
 public:
@@ -24,4 +24,4 @@ public:
     static std::shared_ptr<IntegratorUI> getIntegrator(int mode);
 };
 
-} // namespace futaba
+FUTABA_NAMESPACE_END

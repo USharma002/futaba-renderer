@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cuda_runtime.h>
+#include "common.cuh"
 #include "triangle.cuh"
 #include "material.cuh"
 #include "bvh.cuh"
@@ -11,21 +12,9 @@
 #include "distribution.cuh"
 #include "emitter.cuh"
 #include "mesh.cuh"
-#include "medium.cuh"
+#include "scene_loader.h"
 
-namespace futaba {
-
-// ---------------------------------------------------------------------------
-// CUDA error-checking helper (host only).
-// ---------------------------------------------------------------------------
-#define CUDA_CHECK(call)                                                       \
-    do {                                                                       \
-        const cudaError_t _err = (call);                                       \
-        if (_err != cudaSuccess) {                                             \
-            fprintf(stderr, "CUDA error at %s:%d  %s\n",                       \
-                    __FILE__, __LINE__, cudaGetErrorString(_err));             \
-        }                                                                      \
-    } while (0)
+FUTABA_NAMESPACE_BEGIN
 
 inline bool supportsPrefetch() {
     static int supported = -1;
@@ -51,6 +40,33 @@ inline void safeMemPrefetchAsync(const void* devPtr, size_t count, int deviceId)
     }
 }
 
+// Frees a CUDA-managed allocation if one is set, and nulls the pointer.
+// Every Scene::set*() / clear() below uses this
+template<typename T>
+inline void freeManaged(T*& devPtr) {
+    if (devPtr != nullptr) {
+        CUDA_CHECK(cudaFree(devPtr));
+        devPtr = nullptr;
+    }
+}
+
+// Replaces a CUDA-managed device array with a fresh copy of hostPtr[0..count).
+// Frees any existing allocation first, then allocates + copies + prefetches
+// the new one. Every Scene::set*() below is a one-line call to this.
+template<typename T>
+inline void uploadManaged(T*& devPtr, const T* hostPtr, size_t count) {
+    freeManaged(devPtr);
+    if (count == 0 || hostPtr == nullptr)
+        return;
+
+    int deviceId = 0;
+    cudaGetDevice(&deviceId);
+
+    CUDA_CHECK(cudaMallocManaged(&devPtr, count * sizeof(T)));
+    CUDA_CHECK(cudaMemcpy(devPtr, hostPtr, count * sizeof(T), cudaMemcpyHostToDevice));
+    safeMemPrefetchAsync(devPtr, count * sizeof(T), deviceId);
+}
+
 
 // ---------------------------------------------------------------------------
 // Scene
@@ -58,13 +74,12 @@ inline void safeMemPrefetchAsync(const void* devPtr, size_t count, int deviceId)
 struct Scene {
     Triangle*       triangles    = nullptr;
     Material*       materials    = nullptr;
-    MeshInstanceGPU* meshes      = nullptr;
-    EmitterGPU*     emitters     = nullptr;
+    MeshInstance*   meshes       = nullptr;
+    EmitterInstance* emitters     = nullptr;
 
     float*          emitterTriangleCdf = nullptr;
     int*            emissiveTriangleIndices = nullptr; // maps cdf index -> global triangle index
     int*            emissiveGlobalToIndex = nullptr;   // maps global triangle idx -> emissive array idx or -1
-    int*            nonAreaEmitterIndices = nullptr;   // device array of indices into emitters[]
 
     EnvironmentMapEmitter envMap;
 
@@ -75,7 +90,6 @@ struct Scene {
     uint32_t        meshCount    = 0;
     uint32_t        emitterCount = 0;
     int             emissiveTriCount = 0;
-    int             nonAreaEmitterCount = 0;
     float           emitterTriangleFuncSum = 0.f; // sum of weights (area * intensity)
 
     Point3f         boundsMin = Point3f(1e30f, 1e30f, 1e30f);
@@ -83,10 +97,6 @@ struct Scene {
 
     bool            use_vertex_normals = false;
     bool            use_nee = true;
-
-    bool            hasMedium = false;
-    int             mediumMeshId = -1;
-    Medium          medium;
 
     // -----------------------------------------------------------------------
     // Intersection
@@ -109,8 +119,6 @@ struct Scene {
                 }
             }
         }
-
-
 
         return hit;
     }
@@ -151,11 +159,10 @@ struct Scene {
         if (emitters == nullptr) return Color3f(0.f);
         if (emitterId < 0 || (uint32_t)emitterId >= emitterCount) return Color3f(0.f);
 
-        const EmitterGPU& e = emitters[emitterId];
+        const EmitterInstance& e = emitters[emitterId];
 
-        if (e.type == kEmitterTypeArea) {
-            const bool twoSided = (e.flags & EMITTER_FLAG_TWO_SIDED) != 0u;
-            if (!twoSided && !si.front_face)
+        if (e.type == EmitterType::Area) {
+            if (!e.twoSided && !si.front_face)
                 return Color3f(0.f);
             return e.radiance;
         }
@@ -194,60 +201,12 @@ struct Scene {
                                         const int* hostEmissiveGlobalToIndex,
                                         int globalToIndexCount)
     {
-        if (emitterTriangleCdf != nullptr) {
-            CUDA_CHECK(cudaFree(emitterTriangleCdf));
-            emitterTriangleCdf = nullptr;
-        }
-        if (emissiveTriangleIndices != nullptr) {
-            CUDA_CHECK(cudaFree(emissiveTriangleIndices));
-            emissiveTriangleIndices = nullptr;
-        }
-        if (emissiveGlobalToIndex != nullptr) {
-            CUDA_CHECK(cudaFree(emissiveGlobalToIndex));
-            emissiveGlobalToIndex = nullptr;
-        }
-
         emissiveTriCount = emissiveCount;
         emitterTriangleFuncSum = funcSum;
 
-        int deviceId = 0;
-        cudaGetDevice(&deviceId);
-
-        if (cdfCount > 0 && hostCdf != nullptr) {
-            CUDA_CHECK(cudaMallocManaged(&emitterTriangleCdf, (size_t)cdfCount * sizeof(float)));
-            CUDA_CHECK(cudaMemcpy(emitterTriangleCdf, hostCdf, (size_t)cdfCount * sizeof(float), cudaMemcpyHostToDevice));
-            safeMemPrefetchAsync(emitterTriangleCdf, (size_t)cdfCount * sizeof(float), deviceId);
-        }
-
-        if (emissiveCount > 0 && hostEmissiveTriangleIndices != nullptr) {
-            CUDA_CHECK(cudaMallocManaged(&emissiveTriangleIndices, (size_t)emissiveCount * sizeof(int)));
-            CUDA_CHECK(cudaMemcpy(emissiveTriangleIndices, hostEmissiveTriangleIndices, (size_t)emissiveCount * sizeof(int), cudaMemcpyHostToDevice));
-            safeMemPrefetchAsync(emissiveTriangleIndices, (size_t)emissiveCount * sizeof(int), deviceId);
-        }
-
-        if (globalToIndexCount > 0 && hostEmissiveGlobalToIndex != nullptr) {
-            CUDA_CHECK(cudaMallocManaged(&emissiveGlobalToIndex, (size_t)globalToIndexCount * sizeof(int)));
-            CUDA_CHECK(cudaMemcpy(emissiveGlobalToIndex, hostEmissiveGlobalToIndex, (size_t)globalToIndexCount * sizeof(int), cudaMemcpyHostToDevice));
-            safeMemPrefetchAsync(emissiveGlobalToIndex, (size_t)globalToIndexCount * sizeof(int), deviceId);
-        }
-    }
-
-    void setNonAreaEmitters(const int* hostEmitterIndices, int count) {
-        if (nonAreaEmitterIndices != nullptr) {
-            CUDA_CHECK(cudaFree(nonAreaEmitterIndices));
-            nonAreaEmitterIndices = nullptr;
-        }
-
-        nonAreaEmitterCount = count;
-        if (count <= 0 || hostEmitterIndices == nullptr)
-            return;
-
-        int deviceId = 0;
-        cudaGetDevice(&deviceId);
-
-        CUDA_CHECK(cudaMallocManaged(&nonAreaEmitterIndices, (size_t)count * sizeof(int)));
-        CUDA_CHECK(cudaMemcpy(nonAreaEmitterIndices, hostEmitterIndices, (size_t)count * sizeof(int), cudaMemcpyHostToDevice));
-        safeMemPrefetchAsync(nonAreaEmitterIndices, (size_t)count * sizeof(int), deviceId);
+        uploadManaged(emitterTriangleCdf, hostCdf, cdfCount > 0 ? (size_t)cdfCount : 0);
+        uploadManaged(emissiveTriangleIndices, hostEmissiveTriangleIndices, emissiveCount > 0 ? (size_t)emissiveCount : 0);
+        uploadManaged(emissiveGlobalToIndex, hostEmissiveGlobalToIndex, globalToIndexCount > 0 ? (size_t)globalToIndexCount : 0);
     }
 
     // -----------------------------------------------------------------------
@@ -255,84 +214,37 @@ struct Scene {
     // -----------------------------------------------------------------------
 
     void setTriangles(const Triangle* hostTriangles, uint32_t count) {
-        if (triangles != nullptr) {
-            CUDA_CHECK(cudaFree(triangles));
-            triangles = nullptr;
-        }
         triangleCount = count;
-        if (triangleCount == 0) return;
+        if (triangleCount == 0) {
+            freeManaged(triangles);
+            return;
+        }
 
         // Compute host-side scene bounds for normalization heuristics.
-        Point3f minP(1e30f, 1e30f, 1e30f);
-        Point3f maxP(-1e30f, -1e30f, -1e30f);
+        AABB bounds;
         for (uint32_t i = 0; i < triangleCount; ++i) {
-            const Triangle& t = hostTriangles[i];
-            minP.x = fminf(minP.x, fminf(t.p0.x, fminf(t.p1.x, t.p2.x)));
-            minP.y = fminf(minP.y, fminf(t.p0.y, fminf(t.p1.y, t.p2.y)));
-            minP.z = fminf(minP.z, fminf(t.p0.z, fminf(t.p1.z, t.p2.z)));
-            maxP.x = fmaxf(maxP.x, fmaxf(t.p0.x, fmaxf(t.p1.x, t.p2.x)));
-            maxP.y = fmaxf(maxP.y, fmaxf(t.p0.y, fmaxf(t.p1.y, t.p2.y)));
-            maxP.z = fmaxf(maxP.z, fmaxf(t.p0.z, fmaxf(t.p1.z, t.p2.z)));
+            bounds.expand(hostTriangles[i].bounds());
         }
-        boundsMin = minP;
-        boundsMax = maxP;
+        boundsMin = bounds.min;
+        boundsMax = bounds.max;
 
-        int deviceId = 0;
-        cudaGetDevice(&deviceId);
-
-        CUDA_CHECK(cudaMallocManaged(&triangles, triangleCount * sizeof(Triangle)));
-        CUDA_CHECK(cudaMemcpy(triangles, hostTriangles, triangleCount * sizeof(Triangle), cudaMemcpyHostToDevice));
-        safeMemPrefetchAsync(triangles, triangleCount * sizeof(Triangle), deviceId);
-        
+        uploadManaged(triangles, hostTriangles, (size_t)triangleCount);
         bvh.build(triangles, triangleCount);
     }
 
     void setMaterials(const Material* hostMaterials, uint32_t count) {
-        if (materials != nullptr) {
-            CUDA_CHECK(cudaFree(materials));
-            materials = nullptr;
-        }
         materialCount = count;
-        if (materialCount == 0) return;
-
-        int deviceId = 0;
-        cudaGetDevice(&deviceId);
-
-        CUDA_CHECK(cudaMallocManaged(&materials, materialCount * sizeof(Material)));
-        CUDA_CHECK(cudaMemcpy(materials, hostMaterials, materialCount * sizeof(Material), cudaMemcpyHostToDevice));
-        safeMemPrefetchAsync(materials, materialCount * sizeof(Material), deviceId);
+        uploadManaged(materials, hostMaterials, (size_t)count);
     }
 
-    void setMeshes(const MeshInstanceGPU* hostMeshes, uint32_t count) {
-        if (meshes != nullptr) {
-            CUDA_CHECK(cudaFree(meshes));
-            meshes = nullptr;
-        }
+    void setMeshes(const MeshInstance* hostMeshes, uint32_t count) {
         meshCount = count;
-        if (meshCount == 0) return;
-
-        int deviceId = 0;
-        cudaGetDevice(&deviceId);
-
-        CUDA_CHECK(cudaMallocManaged(&meshes, meshCount * sizeof(MeshInstanceGPU)));
-        CUDA_CHECK(cudaMemcpy(meshes, hostMeshes, meshCount * sizeof(MeshInstanceGPU), cudaMemcpyHostToDevice));
-        safeMemPrefetchAsync(meshes, meshCount * sizeof(MeshInstanceGPU), deviceId);
+        uploadManaged(meshes, hostMeshes, (size_t)count);
     }
 
-    void setEmitters(const EmitterGPU* hostEmitters, uint32_t count) {
-        if (emitters != nullptr) {
-            CUDA_CHECK(cudaFree(emitters));
-            emitters = nullptr;
-        }
+    void setEmitters(const EmitterInstance* hostEmitters, uint32_t count) {
         emitterCount = count;
-        if (emitterCount == 0) return;
-
-        int deviceId = 0;
-        cudaGetDevice(&deviceId);
-
-        CUDA_CHECK(cudaMallocManaged(&emitters, emitterCount * sizeof(EmitterGPU)));
-        CUDA_CHECK(cudaMemcpy(emitters, hostEmitters, emitterCount * sizeof(EmitterGPU), cudaMemcpyHostToDevice));
-        safeMemPrefetchAsync(emitters, emitterCount * sizeof(EmitterGPU), deviceId);
+        uploadManaged(emitters, hostEmitters, (size_t)count);
     }
 
     void setEnvironmentMap(const Color3f* hostPixels, uint32_t width, uint32_t height,
@@ -344,31 +256,103 @@ struct Scene {
         envMap.setConstant(radiance);
     }
 
+    void load(const CPUScene& cpuScene) {
+        clear();
+
+        // 1. Upload triangles and build BVH
+        setTriangles(cpuScene.triangles.data(), (uint32_t)cpuScene.triangles.size());
+
+        // 2. Upload materials
+        setMaterials(cpuScene.materials.data(), (uint32_t)cpuScene.materials.size());
+
+        // 3. Upload meshes
+        setMeshes(cpuScene.meshes.data(), (uint32_t)cpuScene.meshes.size());
+
+        // 4. Upload emitters
+        setEmitters(cpuScene.emitters.data(), (uint32_t)cpuScene.emitters.size());
+
+        // 5. Setup environment map
+        if (cpuScene.envMap.hasEnvMap) {
+            setEnvironmentMap(cpuScene.envMap.pixels.data(), 
+                              cpuScene.envMap.width, 
+                              cpuScene.envMap.height, 
+                              cpuScene.envMap.toWorld);
+        } else if (cpuScene.envMap.hasConstant) {
+            setConstantEnvironment(cpuScene.envMap.constantRadiance);
+        }
+
+        // 6. Build emissive-triangle distribution
+        std::vector<int> emissiveTriIndices;
+        std::vector<float> emissiveWeights;
+        emissiveTriIndices.reserve(cpuScene.triangles.size());
+        emissiveWeights.reserve(cpuScene.triangles.size());
+
+        auto getLuminanceColor = [](const Color3f &c) {
+            return c.x * 0.212671f + c.y * 0.715160f + c.z * 0.072169f;
+        };
+
+        auto triangleEmission = [&](const Triangle &t) -> Color3f {
+            if (t.mesh_id >= 0 && (uint32_t)t.mesh_id < cpuScene.meshes.size()) {
+                const int emitterId = cpuScene.meshes[t.mesh_id].emitterId;
+                if (emitterId >= 0 && (uint32_t)emitterId < cpuScene.emitters.size()) {
+                    return cpuScene.emitters[emitterId].radiance;
+                }
+            }
+            if (t.material_id >= 0 && (uint32_t)t.material_id < cpuScene.materials.size()) {
+                return cpuScene.materials[t.material_id].emission;
+            }
+            return Color3f(0.f);
+        };
+
+        for (size_t i = 0; i < cpuScene.triangles.size(); ++i) {
+            const Triangle &t = cpuScene.triangles[i];
+            float area = 0.5f * length(cross(t.p1 - t.p0, t.p2 - t.p0));
+            Color3f emission = triangleEmission(t);
+            float w = area * getLuminanceColor(emission);
+            if (w > 0.f) {
+                emissiveTriIndices.push_back((int)i);
+                emissiveWeights.push_back(w);
+            }
+        }
+
+        Distribution1D lightDist;
+        std::vector<int> globalToIndex(cpuScene.triangles.size(), -1);
+        if (!emissiveWeights.empty()) {
+            lightDist.build(emissiveWeights);
+            for (size_t i = 0; i < emissiveTriIndices.size(); ++i) {
+                globalToIndex[emissiveTriIndices[i]] = (int)i;
+            }
+        }
+
+        setEmitterTriangleDistribution(lightDist.cdf.data(), (int)lightDist.cdf.size(), lightDist.funcSum,
+                                       emissiveTriIndices.data(), (int)emissiveTriIndices.size(),
+                                       globalToIndex.data(), (int)globalToIndex.size());
+
+    }
+
     void clear() {
-        if (triangles != nullptr) { CUDA_CHECK(cudaFree(triangles)); triangles = nullptr; }
+        freeManaged(triangles);
         triangleCount = 0;
         bvh.clear();
 
-        if (materials != nullptr) { CUDA_CHECK(cudaFree(materials)); materials = nullptr; }
+        freeManaged(materials);
         materialCount = 0;
 
-        if (meshes != nullptr) { CUDA_CHECK(cudaFree(meshes)); meshes = nullptr; }
+        freeManaged(meshes);
         meshCount = 0;
 
-        if (emitters != nullptr) { CUDA_CHECK(cudaFree(emitters)); emitters = nullptr; }
+        freeManaged(emitters);
         emitterCount = 0;
 
-        if (emitterTriangleCdf != nullptr) { CUDA_CHECK(cudaFree(emitterTriangleCdf)); emitterTriangleCdf = nullptr; }
-        if (emissiveTriangleIndices != nullptr) { CUDA_CHECK(cudaFree(emissiveTriangleIndices)); emissiveTriangleIndices = nullptr; }
-        if (emissiveGlobalToIndex != nullptr) { CUDA_CHECK(cudaFree(emissiveGlobalToIndex)); emissiveGlobalToIndex = nullptr; }
-        if (nonAreaEmitterIndices != nullptr) { CUDA_CHECK(cudaFree(nonAreaEmitterIndices)); nonAreaEmitterIndices = nullptr; }
+        freeManaged(emitterTriangleCdf);
+        freeManaged(emissiveTriangleIndices);
+        freeManaged(emissiveGlobalToIndex);
 
         emissiveTriCount = 0;
-        nonAreaEmitterCount = 0;
         emitterTriangleFuncSum = 0.f;
 
         envMap.clear();
     }
 };
 
-} // namespace futaba
+FUTABA_NAMESPACE_END

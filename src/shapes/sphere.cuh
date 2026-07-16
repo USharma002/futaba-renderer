@@ -2,7 +2,7 @@
 #include "common.cuh"
 #include "diffuse.cuh"
 
-namespace futaba {
+FUTABA_NAMESPACE_BEGIN
 
 struct Sphere {
     float radius; // Radius of the sphere (4 bytes)
@@ -44,4 +44,4 @@ struct Sphere {
     }
 };
 
-}
+FUTABA_NAMESPACE_END

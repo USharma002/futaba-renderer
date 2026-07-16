@@ -4,7 +4,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace futaba {
+FUTABA_NAMESPACE_BEGIN
 
 bool appendMeshGeometry(const std::string& meshName,
                        int materialId,
@@ -12,13 +12,12 @@ bool appendMeshGeometry(const std::string& meshName,
                        const Matrix4f& transform,
                        const Matrix4f& normalTransform,
                        const std::vector<Triangle>& localTriangles,
-                       LoadedScene& out)
+                       CPUScene& out)
 {
     const uint32_t meshTriangleStart = (uint32_t)out.triangles.size();
     const int meshId = (int)out.meshes.size();
 
-    Point3f boundsMin(1e30f, 1e30f, 1e30f);
-    Point3f boundsMax(-1e30f, -1e30f, -1e30f);
+    AABB bbox;
 
     for (const auto& localT : localTriangles) {
         Triangle t = localT;
@@ -36,29 +35,23 @@ bool appendMeshGeometry(const std::string& meshName,
         t.mesh_id = meshId;
 
         for (const auto& p : {t.p0, t.p1, t.p2}) {
-            boundsMin.x = std::min(boundsMin.x, p.x);
-            boundsMin.y = std::min(boundsMin.y, p.y);
-            boundsMin.z = std::min(boundsMin.z, p.z);
-            boundsMax.x = std::max(boundsMax.x, p.x);
-            boundsMax.y = std::max(boundsMax.y, p.y);
-            boundsMax.z = std::max(boundsMax.z, p.z);
+            bbox.grow(p);
         }
 
         out.triangles.push_back(t);
     }
 
     MeshInstance meshInst;
-    meshInst.name          = meshName;
     meshInst.materialId    = materialId;
     meshInst.triangleStart = meshTriangleStart;
     meshInst.triangleCount = (uint32_t)localTriangles.size();
     meshInst.transform     = transform;
     meshInst.emitterType   = (emitterId >= 0) ? EmitterType::Area : EmitterType::None;
     meshInst.emitterId     = emitterId;
-    meshInst.boundingBoxMin = boundsMin;
-    meshInst.boundingBoxMax = boundsMax;
+    meshInst.bbox          = bbox;
 
     out.meshes.push_back(meshInst);
+    out.meshNames.push_back(meshName);
     return true;
 }
 
@@ -67,7 +60,7 @@ bool appendRectangleShape(const std::string& meshName,
                          int emitterId,
                          const Matrix4f& transform,
                          const Matrix4f& normalTransform,
-                         LoadedScene& out)
+                         CPUScene& out)
 {
     std::vector<Triangle> localTriangles;
     localTriangles.reserve(2);
@@ -107,7 +100,7 @@ bool appendSphereShape(const std::string& meshName,
                       int emitterId,
                       const Matrix4f& transform,
                       const Matrix4f& normalTransform,
-                      LoadedScene& out)
+                      CPUScene& out)
 {
     const int stacks = 16;
     const int slices = 16;
@@ -183,7 +176,7 @@ bool appendDiskShape(const std::string& meshName,
                     int emitterId,
                     const Matrix4f& transform,
                     const Matrix4f& normalTransform,
-                    LoadedScene& out)
+                    CPUScene& out)
 {
     const int segments = 32;
     const Vector3f n(0.f, 0.f, 1.f);
@@ -219,7 +212,7 @@ bool appendCubeShape(const std::string& meshName,
                     int emitterId,
                     const Matrix4f& transform,
                     const Matrix4f& normalTransform,
-                    LoadedScene& out)
+                    CPUScene& out)
 {
     const Vector3f faceNormals[6] = {
         Vector3f( 1.f,  0.f,  0.f), // +X
@@ -274,4 +267,4 @@ bool appendCubeShape(const std::string& meshName,
     return appendMeshGeometry(meshName, materialId, emitterId, transform, normalTransform, localTriangles, out);
 }
 
-} // namespace futaba
+FUTABA_NAMESPACE_END

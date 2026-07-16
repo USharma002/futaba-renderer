@@ -12,12 +12,17 @@
 #include "roughconductor.cuh"
 #include "roughplastic.cuh"
 
-namespace futaba {
+FUTABA_NAMESPACE_BEGIN
 
 struct BSDF {
-    // Check if the BSDF is Dirac-delta
+    // Check if the BSDF is Dirac-delta, or otherwise has no continuous pdf to
+    // MIS against. BSDF_ID_NULL is a deterministic pass-through and must be
+    // treated the same way here - otherwise the *next* real bounce would MIS-
+    // weight an emitter hit against a bogus continuous pdf inherited from the
+    // null interaction.
     HD static bool is_delta(BSDFType type) {
-        return type == BSDF_ID_MIRROR || type == BSDF_ID_DIELECTRIC || type == BSDF_ID_THINDIELECTRIC;
+        return type == BSDF_ID_MIRROR || type == BSDF_ID_DIELECTRIC ||
+               type == BSDF_ID_THINDIELECTRIC || type == BSDF_ID_NULL;
     }
 
     // Evaluate the albedo (including texture lookup if applicable)
@@ -174,4 +179,4 @@ public:
     }
 };
 
-} // namespace futaba
+FUTABA_NAMESPACE_END

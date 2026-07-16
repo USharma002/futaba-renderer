@@ -5,8 +5,9 @@
 #include "types.cuh"
 #include "triangle.cuh"
 
-namespace futaba {
-struct LoadedScene;
+FUTABA_NAMESPACE_BEGIN
+
+struct CPUScene;
 
 bool appendMeshGeometry(const std::string& meshName,
                        int materialId,
@@ -14,14 +15,14 @@ bool appendMeshGeometry(const std::string& meshName,
                        const Matrix4f& transform,
                        const Matrix4f& normalTransform,
                        const std::vector<Triangle>& localTriangles,
-                       LoadedScene& out);
+                       CPUScene& out);
 
 bool appendRectangleShape(const std::string& meshName,
                          int materialId,
                          int emitterId,
                          const Matrix4f& transform,
                          const Matrix4f& normalTransform,
-                         LoadedScene& out);
+                         CPUScene& out);
 
 bool appendSphereShape(const std::string& meshName,
                       float radius,
@@ -30,20 +31,20 @@ bool appendSphereShape(const std::string& meshName,
                       int emitterId,
                       const Matrix4f& transform,
                       const Matrix4f& normalTransform,
-                      LoadedScene& out);
+                      CPUScene& out);
 
 bool appendDiskShape(const std::string& meshName,
                     int materialId,
                     int emitterId,
                     const Matrix4f& transform,
                     const Matrix4f& normalTransform,
-                    LoadedScene& out);
+                    CPUScene& out);
 
 bool appendCubeShape(const std::string& meshName,
                     int materialId,
                     int emitterId,
                     const Matrix4f& transform,
                     const Matrix4f& normalTransform,
-                    LoadedScene& out);
+                    CPUScene& out);
 
-} // namespace futaba
+FUTABA_NAMESPACE_END

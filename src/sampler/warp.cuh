@@ -5,6 +5,8 @@
 #include "frame.cuh"
 #include <cmath>
 
+FUTABA_NAMESPACE_BEGIN
+
 // Warp functions for importance sampling
 // All points have [0, 1]^d uniform samples
 struct Warp {
@@ -99,7 +101,7 @@ struct Warp {
 
     // Beckmann normal distribution function D(wh).
     HD static float beckmannD(const Vector3f& wh, float alpha) {
-        const float cosThetaH = futaba::Frame::cos_theta(wh);
+        const float cosThetaH = Frame::cos_theta(wh);
         if (cosThetaH <= 0.f)
             return 0.f;
 
@@ -113,7 +115,7 @@ struct Warp {
 
     // PDF of sampling a microfacet normal wh from Beckmann: p(wh) = D(wh) * cos(theta_h).
     HD static float squareToBeckmannPdf(const Vector3f& wh, float alpha) {
-        const float cosThetaH = futaba::Frame::cos_theta(wh);
+        const float cosThetaH = Frame::cos_theta(wh);
         if (cosThetaH <= 0.f)
             return 0.f;
         return beckmannD(wh, alpha) * cosThetaH;
@@ -140,7 +142,7 @@ struct Warp {
 
     // Smith G1 masking term approximation for Beckmann roughness.
     HD static float smithBeckmannG1(const Vector3f& v, const Vector3f& wh, float alpha) {
-        const float cosThetaV = futaba::Frame::cos_theta(v);
+        const float cosThetaV = Frame::cos_theta(v);
         if (cosThetaV <= 0.f)
             return 0.f;
 
@@ -165,4 +167,12 @@ struct Warp {
         return (3.535f * b + 2.181f * b2) / (1.f + 2.276f * b + 2.577f * b2);
     }
 
+    // Map uniform square [0,1]^2 to barycentric coordinates on a triangle
+    HD static Point2f squareToUniformTriangle(const Point2f& sample2) {
+        float sqrt_u = sqrtf(sample2.x);
+        return Point2f(1.0f - sqrt_u, sample2.y * sqrt_u);
+    }
+
 };
+
+FUTABA_NAMESPACE_END

@@ -3,7 +3,8 @@
 #include "types.cuh"
 #include "launch_params.h"
 
-namespace futaba {
+FUTABA_NAMESPACE_BEGIN
+
 namespace tonemap {
 
 // No tone mapping, just return linear
@@ -69,4 +70,5 @@ HD Color3f apply(const Color3f& linear, int mode) {
 }
 
 } // namespace tonemap
-} // namespace futaba
+
+FUTABA_NAMESPACE_END

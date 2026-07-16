@@ -7,7 +7,7 @@
 #include "material.cuh"
 #include "bsdf_sample.cuh"
 
-namespace futaba {
+FUTABA_NAMESPACE_BEGIN
 
 struct Microfacet {
     Color3f kd;
@@ -39,8 +39,15 @@ struct Microfacet {
             kd = Color3f(0.f);
             ks = 1.f;
         } else {
+            // Specular *sampling* probability only (mixture weight between the
+            // cosine-hemisphere and Beckmann sampling strategies). This is a
+            // heuristic, not a physical energy split, so it must never be used
+            // to scale the actual specular reflectance computed in eval() -
+            // doing so would make brighter diffuse materials incorrectly dim
+            // their specular highlight. Floored so the specular lobe stays
+            // reachable via BSDF sampling even for near-white diffuse albedo.
             const float kdMax = fmaxf(kd.x, fmaxf(kd.y, kd.z));
-            ks = 1.f - clamp(kdMax, 0.f, 1.f);
+            ks = clamp(1.f - kdMax, 0.05f, 1.f);
         }
     }
 
@@ -90,7 +97,7 @@ struct Microfacet {
         Color3f result = kd * INV_PI;
 
         const Vector3f hsum = bs.wi + bs.wo;
-        if (hsum.lengthSquared() <= 1e-12f || ks <= 0.f)
+        if (hsum.lengthSquared() <= 1e-12f)
             return result;
 
         const Vector3f wh = normalize(hsum);
@@ -100,7 +107,10 @@ struct Microfacet {
 
         const float cosWhWi = dot(wh, bs.wi);
         const float G = Warp::smithBeckmannG1(bs.wi, wh, alpha) * Warp::smithBeckmannG1(bs.wo, wh, alpha);
-        const float common = ks * D * G / fmaxf(4.f * cosThetaI * cosThetaO, 1e-8f);
+        // NOTE: no `ks` factor here - ks is a sampling-strategy mixture weight
+        // (see constructor), not a physical reflectance scale. The specular
+        // lobe's true magnitude is D * G * F / (4 cosI cosO) regardless of it.
+        const float common = D * G / fmaxf(4.f * cosThetaI * cosThetaO, 1e-8f);
 
         if (isConductor) {
             const Color3f F = fresnel_conductor(cosWhWi);
@@ -181,4 +191,4 @@ struct Microfacet {
     }
 };
 
-} // namespace futaba
+FUTABA_NAMESPACE_END

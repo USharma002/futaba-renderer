@@ -14,7 +14,7 @@
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include <stb_image_write.h>
 
-namespace futaba {
+FUTABA_NAMESPACE_BEGIN
 
 Bitmap* HDRFilm::toBitmap(const float4* d_alternative_pixels) const {
     Bitmap* bmp = new Bitmap(width, height);
@@ -112,4 +112,4 @@ bool Bitmap::saveEXR(const std::string& filename) const {
     return true;
 }
 
-} // namespace futaba
+FUTABA_NAMESPACE_END

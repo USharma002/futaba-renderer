@@ -1,25 +1,14 @@
 #pragma once
 
 #include <cstdint>
-#include <cstdio>
-#include <cuda_runtime.h>
 #include <vector>
 #include "types.cuh"
+#include "common.cuh"
 #include "warp.cuh"
 #include "distribution.cuh"
 
-namespace futaba {
+FUTABA_NAMESPACE_BEGIN
 
-#ifndef FUTABA_CUDA_CHECK
-#define FUTABA_CUDA_CHECK(call)                                                \
-    do {                                                                       \
-        const cudaError_t _err = (call);                                       \
-        if (_err != cudaSuccess) {                                             \
-            fprintf(stderr, "CUDA error at %s:%d  %s\n",                       \
-                    __FILE__, __LINE__, cudaGetErrorString(_err));             \
-        }                                                                      \
-    } while (0)
-#endif
 
 struct EnvironmentMapEmitter {
     Color3f*  pixels      = nullptr;
@@ -32,7 +21,6 @@ struct EnvironmentMapEmitter {
 
     // 2D Importance Sampling Tables (GPU Device pointers)
     float*    condCdfs    = nullptr; // Size: height * (width + 1)
-    float*    rowSums     = nullptr; // Size: height
     float*    marginalCdf = nullptr; // Size: height + 1
     float     marginalSum = 0.f;
 
@@ -188,77 +176,40 @@ struct EnvironmentMapEmitter {
             return;
 
         // Allocate and copy pixels to GPU
-        FUTABA_CUDA_CHECK(cudaMalloc(&pixels, width * height * sizeof(Color3f)));
-        FUTABA_CUDA_CHECK(cudaMemcpy(pixels, hostPixels,
+        CUDA_CHECK(cudaMalloc(&pixels, width * height * sizeof(Color3f)));
+        CUDA_CHECK(cudaMemcpy(pixels, hostPixels,
                                      width * height * sizeof(Color3f),
                                      cudaMemcpyHostToDevice));
 
-        // 1. Build conditional CDFs on host
-        std::vector<float> rowSumsHost(height, 0.f);
-        std::vector<float> condCdfsHost(height * (width + 1), 0.f);
-
+        // 1. Build weights on host
+        std::vector<float> weights(width * height);
         for (uint32_t y = 0; y < height; ++y) {
             float sinTheta = sinf(M_PI * (y + 0.5f) / height);
-            
-            condCdfsHost[y * (width + 1) + 0] = 0.f;
             for (uint32_t x = 0; x < width; ++x) {
-                const Color3f& color = hostPixels[y * width + x];
-                float lum = getLuminance(color);
-                float weight = lum * sinTheta;
-                condCdfsHost[y * (width + 1) + (x + 1)] = condCdfsHost[y * (width + 1) + x] + weight;
-            }
-            
-            float rowSum = condCdfsHost[y * (width + 1) + width];
-            rowSumsHost[y] = rowSum;
-
-            // Normalize conditional CDF for row y
-            if (rowSum > 0.f) {
-                for (uint32_t x = 1; x <= width; ++x) {
-                    condCdfsHost[y * (width + 1) + x] /= rowSum;
-                }
-            } else {
-                // Uniform if totally dark
-                for (uint32_t x = 1; x <= width; ++x) {
-                    condCdfsHost[y * (width + 1) + x] = (float)x / width;
-                }
+                weights[y * width + x] = getLuminance(hostPixels[y * width + x]) * sinTheta;
             }
         }
 
-        // 2. Build marginal CDF over rows on host
-        std::vector<float> marginalCdfHost(height + 1, 0.f);
-        marginalCdfHost[0] = 0.f;
+        // 2. Construct 2D distribution on host
+        Distribution2D dist;
+        dist.build(weights, width, height);
+        marginalSum = dist.marginal.funcSum;
+
+        // 3. Flatten conditional CDFs for copying
+        std::vector<float> condCdfsHost(height * (width + 1));
         for (uint32_t y = 0; y < height; ++y) {
-            marginalCdfHost[y + 1] = marginalCdfHost[y] + rowSumsHost[y];
+            std::memcpy(&condCdfsHost[y * (width + 1)], dist.cond[y].cdf.data(), (width + 1) * sizeof(float));
         }
 
-        marginalSum = marginalCdfHost[height];
-
-        // Normalize marginal CDF
-        if (marginalSum > 0.f) {
-            for (uint32_t y = 1; y <= height; ++y) {
-                marginalCdfHost[y] /= marginalSum;
-            }
-        } else {
-            // Uniform if totally dark
-            for (uint32_t y = 1; y <= height; ++y) {
-                marginalCdfHost[y] = (float)y / height;
-            }
-        }
-
-        // 3. Allocate and copy CDF arrays to GPU
-        FUTABA_CUDA_CHECK(cudaMalloc(&condCdfs, condCdfsHost.size() * sizeof(float)));
-        FUTABA_CUDA_CHECK(cudaMemcpy(condCdfs, condCdfsHost.data(),
+        // 4. Allocate and copy CDF arrays to GPU
+        CUDA_CHECK(cudaMalloc(&condCdfs, condCdfsHost.size() * sizeof(float)));
+        CUDA_CHECK(cudaMemcpy(condCdfs, condCdfsHost.data(),
                                      condCdfsHost.size() * sizeof(float),
                                      cudaMemcpyHostToDevice));
 
-        FUTABA_CUDA_CHECK(cudaMalloc(&rowSums, rowSumsHost.size() * sizeof(float)));
-        FUTABA_CUDA_CHECK(cudaMemcpy(rowSums, rowSumsHost.data(),
-                                     rowSumsHost.size() * sizeof(float),
-                                     cudaMemcpyHostToDevice));
-
-        FUTABA_CUDA_CHECK(cudaMalloc(&marginalCdf, marginalCdfHost.size() * sizeof(float)));
-        FUTABA_CUDA_CHECK(cudaMemcpy(marginalCdf, marginalCdfHost.data(),
-                                     marginalCdfHost.size() * sizeof(float),
+        CUDA_CHECK(cudaMalloc(&marginalCdf, dist.marginal.cdf.size() * sizeof(float)));
+        CUDA_CHECK(cudaMemcpy(marginalCdf, dist.marginal.cdf.data(),
+                                     dist.marginal.cdf.size() * sizeof(float),
                                      cudaMemcpyHostToDevice));
     }
 
@@ -272,10 +223,9 @@ struct EnvironmentMapEmitter {
     }
 
     void clear() {
-        if (pixels)      { FUTABA_CUDA_CHECK(cudaFree(pixels)); pixels = nullptr; }
-        if (condCdfs)    { FUTABA_CUDA_CHECK(cudaFree(condCdfs)); condCdfs = nullptr; }
-        if (rowSums)     { FUTABA_CUDA_CHECK(cudaFree(rowSums)); rowSums = nullptr; }
-        if (marginalCdf) { FUTABA_CUDA_CHECK(cudaFree(marginalCdf)); marginalCdf = nullptr; }
+        if (pixels)      { CUDA_CHECK(cudaFree(pixels)); pixels = nullptr; }
+        if (condCdfs)    { CUDA_CHECK(cudaFree(condCdfs)); condCdfs = nullptr; }
+        if (marginalCdf) { CUDA_CHECK(cudaFree(marginalCdf)); marginalCdf = nullptr; }
         marginalSum = 0.f;
 
         width = 0;
@@ -286,4 +236,4 @@ struct EnvironmentMapEmitter {
     }
 };
 
-} // namespace futaba
+FUTABA_NAMESPACE_END

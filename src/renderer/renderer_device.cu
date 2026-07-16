@@ -8,8 +8,7 @@
 #include "launch_params.h"
 #include "normals.cuh"
 #include "path.cuh"
-#include "volpath.cuh"
-#include "power_sampler.cuh"
+
 #include "tonemapping.cuh"
 #include "perspective.cuh"
 #include "scene.cuh"
@@ -44,14 +43,14 @@ static __device__ Ray3f setup_ray(uint3 idx, int& index, Sampler& sampler) {
 // When denoising is active the host-side denoiser->exec() call is responsible
 // for reading film_pixels plus the albedo/normal guide buffers and writing the
 // final tonemapped result to the PBO. Guide buffers are populated by the path
-// kernel's RecordDenoiseGuides template path before this function is called,
-// so no intersection work is done here.
+// kernel's PathRecorder before this function is called, so no intersection
+// work is done here.
 static __device__ void accumulate_and_write(int index, const Color3f& radiance) {
   Color3f acc = params.film_pixels[index];
   acc += radiance;
   params.film_pixels[index] = acc;
 
-  if (!params.denoise_active) {
+  if (!params.denoise.active) {
     Color3f linear_avg  = acc / (float)params.sampleCount;
     Color3f tonemapped  = tonemap::apply(linear_avg, params.tonemapping_mode);
     Color3f final_color = toSRGB(tonemapped);
@@ -95,9 +94,9 @@ extern "C" __global__ void __raygen__render() {
       break;
     }
     case INTEGRATOR_PHONG: {
-      Phong phong(params.phong_light_dir, params.phong_ambient,
-                  params.phong_diffuse, params.phong_specular,
-                  params.phong_shininess);
+      Phong phong(params.phong.light_dir, params.phong.ambient,
+                  params.phong.diffuse, params.phong.specular,
+                  params.phong.shininess);
       radiance = phong.sample(ray, params.scene, sampler);
       break;
     }
@@ -122,71 +121,20 @@ extern "C" __global__ void __raygen__path() {
   Sampler sampler;
   Ray3f ray = setup_ray(idx, index, sampler);
 
-  Color3f radiance;
-  EmitterSampler light_sampler(params.light_sampler_type, params.cdf_sampler_data);
+  EmitterSampler light_sampler(params.light_sampler);
   Path integrator(params.max_depth, params.rr_depth, light_sampler);
 
-  if (params.train_active) {
-    TrainingBuffers tb;
-    tb.active        = params.train_active;
-    tb.position      = params.train_position;
-    tb.normals       = params.train_normals;
-    tb.wi            = params.train_wi;
-    tb.wo            = params.train_wo;
-    tb.radiance      = params.train_radiance;
-    tb.direction_pdf = params.train_direction_pdf;
-    tb.material_id   = params.train_material_id;
-    tb.max_depth     = params.max_depth;
-    tb.pixel_index   = index;
-    tb.img_size      = params.width * params.height;
-
-    if (params.denoise_active && params.denoise_albedo_buffer && params.denoise_normal_buffer) {
-      radiance = integrator.sample<true, true>(
-          ray, params.scene, sampler, tb,
-          params.denoise_albedo_buffer, params.denoise_normal_buffer,
-          index, params.sampleCount, &params.camera, params.path_guiding_mode,
-          params.sTreeNodes, params.sTreeAABB, params.bsdf_sampling_fraction,
-          params.ppg_distribution_mode);
-    } else {
-      radiance = integrator.sample<true, false>(
-          ray, params.scene, sampler, tb,
-          nullptr, nullptr, -1, 1, nullptr, params.path_guiding_mode,
-          params.sTreeNodes, params.sTreeAABB, params.bsdf_sampling_fraction,
-          params.ppg_distribution_mode);
-    }
-  } else {
-    if (params.denoise_active && params.denoise_albedo_buffer && params.denoise_normal_buffer) {
-      radiance = integrator.sample<false, true>(
-          ray, params.scene, sampler, TrainingBuffers(),
-          params.denoise_albedo_buffer, params.denoise_normal_buffer,
-          index, params.sampleCount, &params.camera, params.path_guiding_mode,
-          params.sTreeNodes, params.sTreeAABB, params.bsdf_sampling_fraction,
-          params.ppg_distribution_mode);
-    } else {
-      radiance = integrator.sample<false, false>(
-          ray, params.scene, sampler, TrainingBuffers(),
-          nullptr, nullptr, -1, 1, nullptr, params.path_guiding_mode,
-          params.sTreeNodes, params.sTreeAABB, params.bsdf_sampling_fraction,
-          params.ppg_distribution_mode);
-    }
+  PathRecorder recorder;
+  bool recording = params.denoise.active && params.denoise.albedo_buffer && params.denoise.normal_buffer;
+  if (recording) {
+    recorder.albedo_buffer = params.denoise.albedo_buffer;
+    recorder.normal_buffer = params.denoise.normal_buffer;
+    recorder.pixel_index   = index;
+    recorder.sample_count  = params.sampleCount;
+    recorder.camera        = &params.camera;
   }
 
-  accumulate_and_write(index, radiance);
-}
-
-extern "C" __global__ void __raygen__volpath() {
-  uint3 idx = optixGetLaunchIndex();
-
-  if (idx.x >= params.width || idx.y >= params.height)
-    return;
-
-  int index;
-  Sampler sampler;
-  Ray3f ray = setup_ray(idx, index, sampler);
-
-  EmitterSampler light_sampler(params.light_sampler_type, params.cdf_sampler_data);
-  VolumetricPath integrator(params.max_depth, params.rr_depth, false, light_sampler);
-  Color3f radiance = integrator.sample(ray, params.scene, sampler);
+  Color3f radiance = integrator.sample(ray, params.scene, sampler, recording ? &recorder : nullptr);
 
   accumulate_and_write(index, radiance);
 }

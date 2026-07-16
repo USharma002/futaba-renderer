@@ -1,4 +1,8 @@
 #include "scene_loader.h"
+#define TINYOBJLOADER_IMPLEMENTATION
+#include <tiny_obj_loader.h>
+#include <happly.h>
+
 #include "proplist.h"
 #include "material_builders.h"
 #include "emitter_builders.h"
@@ -23,15 +27,70 @@
 
 namespace fs = std::filesystem;
 
-namespace futaba {
+FUTABA_NAMESPACE_BEGIN
 
-static Vector3f parseVectorOrPoint(const pugi::xml_node& node,
-                                   const std::function<Vector3f(const std::string&)>& parseVec3Fn,
-                                   const std::function<std::string(const std::string&)>& resolveValue);
+namespace {
 
-// ---------------------------------------------------------------------------
-// Internal helpers
-// ---------------------------------------------------------------------------
+enum ETag {
+    // Objects
+    EScene,
+    EMesh,
+    EBsdf,
+    EEmitter,
+    ECamera,
+    EIntegrator,
+    ERef,
+    ETransform,
+
+    // Properties
+    EBoolean,
+    EInteger,
+    EFloat,
+    EString,
+    EPoint,
+    EVector,
+    EColor,
+    ETexture,
+
+    // Transform Operations
+    ETranslate,
+    EScale,
+    ERotate,
+    EMatrix,
+
+    EInvalid
+};
+
+static ETag getTag(const std::string& name) {
+    static const std::unordered_map<std::string, ETag> tags = {
+        { "scene",      EScene },
+        { "mesh",       EMesh },
+        { "shape",      EMesh },
+        { "bsdf",       EBsdf },
+        { "emitter",    EEmitter },
+        { "camera",     ECamera },
+        { "sensor",     ECamera },
+        { "integrator", EIntegrator },
+        { "ref",        ERef },
+        { "transform",  ETransform },
+        { "boolean",    EBoolean },
+        { "integer",    EInteger },
+        { "float",      EFloat },
+        { "string",     EString },
+        { "point",      EPoint },
+        { "vector",     EVector },
+        { "color",      EColor },
+        { "rgb",        EColor },
+        { "spectrum",   EColor },
+        { "texture",    ETexture },
+        { "translate",  ETranslate },
+        { "scale",      EScale },
+        { "rotate",     ERotate },
+        { "matrix",     EMatrix }
+    };
+    auto it = tags.find(name);
+    return (it != tags.end()) ? it->second : EInvalid;
+}
 
 static float toF(const std::string& s) { return std::stof(s); }
 
@@ -75,7 +134,6 @@ static Matrix4f inverseTransposeUpper3x3(const Matrix4f& m) {
     const float invDet = 1.f / det;
     Matrix4f n;
 
-    // (M^{-1})^T for the 3x3 linear part.
     n.m[0][0] = A * invDet; n.m[0][1] = B * invDet; n.m[0][2] = C * invDet;
     n.m[1][0] = D * invDet; n.m[1][1] = E * invDet; n.m[1][2] = F * invDet;
     n.m[2][0] = G * invDet; n.m[2][1] = H * invDet; n.m[2][2] = I * invDet;
@@ -86,164 +144,7 @@ static Matrix4f inverseTransposeUpper3x3(const Matrix4f& m) {
     return n;
 }
 
-static void fillPropertyList(const pugi::xml_node& node,
-                             PropertyList& plist,
-                             const std::function<Vector3f(const std::string&)>& parseVec3Fn,
-                             const std::function<std::string(const std::string&)>& resolveValue)
-{
-    for (const pugi::xml_node& child : node.children()) {
-        const std::string tag      = child.name();
-        const std::string propName = child.attribute("name").value();
-
-        if (propName.empty()) continue;
-
-        if      (tag == "boolean") {
-            const std::string propVal = resolveValue(child.attribute("value").value());
-            plist.setBoolean(propName, propVal == "true" || propVal == "1");
-        }
-        else if (tag == "integer") {
-            const std::string propVal = resolveValue(child.attribute("value").value());
-            plist.setInteger(propName, std::stoi(propVal));
-        }
-        else if (tag == "float")   {
-            const std::string propVal = resolveValue(child.attribute("value").value());
-            plist.setFloat  (propName, toF(propVal));
-        }
-        else if (tag == "string")  {
-            const std::string propVal = resolveValue(child.attribute("value").value());
-            plist.setString (propName, propVal);
-        }
-        else if (tag == "color" || tag == "rgb" || tag == "spectrum") {
-            Vector3f c = parseVectorOrPoint(child, parseVec3Fn, resolveValue);
-            plist.setColor(propName, Color3f(c.x, c.y, c.z));
-        }
-        else if (tag == "point") {
-            Vector3f p = parseVectorOrPoint(child, parseVec3Fn, resolveValue);
-            plist.setPoint(propName, Point3f(p.x, p.y, p.z));
-        }
-        else if (tag == "vector") {
-            Vector3f v = parseVectorOrPoint(child, parseVec3Fn, resolveValue);
-            plist.setVector(propName, Vector3f(v.x, v.y, v.z));
-        }
-        else if (tag == "texture") {
-            std::string texType = child.attribute("type").value();
-            std::string texFile = resolveValue(child.attribute("filename").value());
-            if (texFile.empty()) {
-                for (const pugi::xml_node& texChild : child.children()) {
-                    if (std::string(texChild.name()) == "string" &&
-                        std::string(texChild.attribute("name").value()) == "filename") {
-                        texFile = resolveValue(texChild.attribute("value").value());
-                    }
-                }
-            }
-            if (!texFile.empty()) {
-                plist.setString(propName + "_texture", texFile);
-            }
-
-            // For checkerboard textures, extract color0 and color1 and average them
-            if (texType == "checkerboard") {
-                Color3f color0(0.4f), color1(0.2f); // reasonable defaults
-                for (const pugi::xml_node& texChild : child.children()) {
-                    std::string cname = texChild.attribute("name").value();
-                    std::string ctag  = texChild.name();
-                    if ((ctag == "color" || ctag == "rgb" || ctag == "spectrum") && cname == "color0") {
-                        Vector3f v = parseVec3Fn(resolveValue(texChild.attribute("value").value()));
-                        color0 = Color3f(v.x, v.y, v.z);
-                    } else if ((ctag == "color" || ctag == "rgb" || ctag == "spectrum") && cname == "color1") {
-                        Vector3f v = parseVec3Fn(resolveValue(texChild.attribute("value").value()));
-                        color1 = Color3f(v.x, v.y, v.z);
-                    }
-                }
-                Color3f avg((color0.x + color1.x) * 0.5f,
-                            (color0.y + color1.y) * 0.5f,
-                            (color0.z + color1.z) * 0.5f);
-                plist.setColor(propName, avg);
-            } else {
-                // Use white so texture color is the sole contributor
-                // (GPU multiplies mat.albedo * texture_sample)
-                plist.setColor(propName, Color3f(1.0f));
-            }
-        }
-    }
-}
-
-static bool flattenBsdfNode(const pugi::xml_node& bsdfNode,
-                             PropertyList& bsdfProps,
-                             std::vector<std::string>& warnings,
-                             const std::function<Vector3f(const std::string&)>& parseVec3Fn,
-                             const std::function<std::string(const std::string&)>& resolveValue)
-{
-    if (!bsdfNode || std::string(bsdfNode.name()) != "bsdf")
-        return false;
-
-    const std::string type = bsdfNode.attribute("type").value();
-    if (type == "twosided" || type == "bumpmap" || type == "mask" || type == "normalmap") {
-        const pugi::xml_node inner = bsdfNode.child("bsdf");
-        if (!inner) {
-            warnings.push_back("Found <bsdf type='" + type + "'> without nested <bsdf>; using diffuse fallback.");
-            bsdfProps.setString("type", "diffuse");
-            return true;
-        }
-        return flattenBsdfNode(inner, bsdfProps, warnings, parseVec3Fn, resolveValue);
-    }
-
-    if (type == "roughconductor") {
-        bsdfProps.setString("type", "roughconductor");
-        fillPropertyList(bsdfNode, bsdfProps, parseVec3Fn, resolveValue);
-        return true;
-    }
-
-    bsdfProps.setString("type", type.empty() ? "diffuse" : type);
-    fillPropertyList(bsdfNode, bsdfProps, parseVec3Fn, resolveValue);
-    return true;
-}
-
-// Shape builder helpers (appendMeshGeometry, appendRectangleShape) are now in shape_factory.cpp
-
-// Env map loaders (loadEnvMapEXR, loadEnvMapHDR) are now in envmap_loader.cpp
-
-Vector3f SceneLoader::parseVec3(const std::string& s) {
-    if (s.find(':') != std::string::npos) {
-        std::vector<std::pair<float, float>> spectrum;
-        std::string tmp = s;
-        for (char& c : tmp) if (c == ',' || c == '\t' || c == '\r' || c == '\n') c = ' ';
-        std::istringstream ss(tmp);
-        std::string token;
-        while (ss >> token) {
-            size_t colon = token.find(':');
-            if (colon != std::string::npos) {
-                try {
-                    float wavelength = std::stof(token.substr(0, colon));
-                    float value = std::stof(token.substr(colon + 1));
-                    spectrum.push_back({wavelength, value});
-                } catch (...) {}
-            }
-        }
-        if (spectrum.empty()) {
-            return Vector3f(0.f);
-        }
-        std::sort(spectrum.begin(), spectrum.end(), [](const auto& a, const auto& b) {
-            return a.first < b.first;
-        });
-
-        auto evalSpectrum = [&spectrum](float w) -> float {
-            if (w <= spectrum.front().first) return spectrum.front().second;
-            if (w >= spectrum.back().first) return spectrum.back().second;
-            for (size_t i = 0; i + 1 < spectrum.size(); ++i) {
-                if (w >= spectrum[i].first && w <= spectrum[i+1].first) {
-                    float t = (w - spectrum[i].first) / (spectrum[i+1].first - spectrum[i].first);
-                    return spectrum[i].second * (1.f - t) + spectrum[i+1].second * t;
-                }
-            }
-            return 0.f;
-        };
-
-        float r = evalSpectrum(600.f);
-        float g = evalSpectrum(550.f);
-        float b = evalSpectrum(450.f);
-        return Vector3f(r, g, b);
-    }
-
+static Vector3f parseVec3(const std::string& s) {
     std::string tmp = s;
     for (char& c : tmp) if (c == ',' || c == '\t' || c == '\r' || c == '\n') c = ' ';
     std::istringstream ss(tmp);
@@ -265,674 +166,450 @@ Vector3f SceneLoader::parseVec3(const std::string& s) {
     return Vector3f(values[0], values[1], values[2]);
 }
 
+static std::string resolveValue(const std::string& raw, const std::unordered_map<std::string, std::string>& defaults) {
+    if (raw.size() > 1 && raw[0] == '$') {
+        const std::string key = raw.substr(1);
+        const auto it = defaults.find(key);
+        if (it != defaults.end())
+            return it->second;
+    }
+    return raw;
+}
+
 static Vector3f parseVectorOrPoint(const pugi::xml_node& node,
-                                   const std::function<Vector3f(const std::string&)>& parseVec3Fn,
-                                   const std::function<std::string(const std::string&)>& resolveValue)
+                            const std::unordered_map<std::string, std::string>& defaults)
 {
-    std::string valStr = resolveValue(node.attribute("value").value());
+    std::string valStr = resolveValue(node.attribute("value").value(), defaults);
     if (!valStr.empty()) {
-        return parseVec3Fn(valStr);
+        return parseVec3(valStr);
     }
     float x = 0.f, y = 0.f, z = 0.f;
-    std::string xStr = resolveValue(node.attribute("x").value());
-    std::string yStr = resolveValue(node.attribute("y").value());
-    std::string zStr = resolveValue(node.attribute("z").value());
+    std::string xStr = resolveValue(node.attribute("x").value(), defaults);
+    std::string yStr = resolveValue(node.attribute("y").value(), defaults);
+    std::string zStr = resolveValue(node.attribute("z").value(), defaults);
     if (!xStr.empty()) x = std::stof(xStr);
     if (!yStr.empty()) y = std::stof(yStr);
     if (!zStr.empty()) z = std::stof(zStr);
     return Vector3f(x, y, z);
 }
 
-// Shape builder helpers (appendSphereShape, appendDiskShape, appendCubeShape) are now in shape_factory.cpp
+static void parseProperty(const pugi::xml_node& node, PropertyList& list, const std::unordered_map<std::string, std::string>& defaults) {
+    const std::string name = node.attribute("name").value();
+    if (name.empty()) return;
 
-// ---------------------------------------------------------------------------
-// OBJ mesh loader (v / vn / f, fan-triangulation)
-// ---------------------------------------------------------------------------
-bool SceneLoader::parseMesh(const std::string& baseDir,
-                             const std::string& objFilename,
-                             const std::string& meshName,
-                             int                materialId,
-                             int                emitterId,
-                             const Matrix4f&    transform,
-                             const Matrix4f&    normalTransform,
-                             LoadedScene&       out,
-                             std::string&       errorOut)
-{
-    fs::path      objPath = fs::path(baseDir) / objFilename;
-    std::ifstream file(objPath);
-    if (!file.is_open()) {
-        errorOut = "Cannot open OBJ file: " + objPath.string();
-        return false;
-    }
-
-    std::vector<Point3f>  verts;
-    std::vector<Vector3f> norms;
-    std::vector<Point2f>  texcoords;
-
-    const uint32_t meshTriangleStart = (uint32_t)out.triangles.size();
-    const int      meshId            = (int)out.meshes.size();
-
-    // Hoist face-index buffers outside the parsing loop to avoid
-    // per-face heap allocation on large meshes.
-    std::vector<int> v_indices;
-    std::vector<int> n_indices;
-    std::vector<int> t_indices;
-
-    std::string line;
-    while (std::getline(file, line)) {
-        if (line.empty() || line[0] == '#') continue;
-
-        std::istringstream ss(line);
-        std::string token;
-        ss >> token;
-
-        if (token == "v") {
-            float x, y, z;
-            ss >> x >> y >> z;
-            Point3f p(x, y, z);
-            p = transform * p;          // bake world transform at load time
-            verts.push_back(p);
+    ETag tag = getTag(node.name());
+    switch (tag) {
+        case EBoolean: {
+            std::string val = resolveValue(node.attribute("value").value(), defaults);
+            list.setBoolean(name, val == "true" || val == "1");
+            break;
         }
-        else if (token == "vn") {
-            float nx, ny, nz;
-            ss >> nx >> ny >> nz;
-            Vector3f n(nx, ny, nz);
-            // Normals must use the inverse-transpose of the upper-left 3×3
-            // of the transform so they remain perpendicular to the surface
-            // under non-uniform scaling.  normalTransform encodes exactly
-            // that matrix (built in the caller for the supported ops).
-            n = normalize(normalTransform * n);
-            norms.push_back(n);
+        case EInteger: {
+            std::string val = resolveValue(node.attribute("value").value(), defaults);
+            list.setInteger(name, std::stoi(val));
+            break;
         }
-        else if (token == "vt") {
-            float u, v;
-            ss >> u >> v;
-            texcoords.push_back(Point2f(u, v));
+        case EFloat: {
+            std::string val = resolveValue(node.attribute("value").value(), defaults);
+            list.setFloat(name, std::stof(val));
+            break;
         }
-        else if (token == "f") {
-            v_indices.clear();
-            n_indices.clear();
-            t_indices.clear();
-
-            std::string part;
-            while (ss >> part) {
-                int v_idx = 0, vt_idx = 0, vn_idx = 0;
-                bool has_vt = false, has_vn = false;
-
-                size_t slash1 = part.find('/');
-                if (slash1 == std::string::npos) {
-                    v_idx = std::stoi(part);
-                } else {
-                    v_idx = std::stoi(part.substr(0, slash1));
-                    size_t slash2 = part.find('/', slash1 + 1);
-                    if (slash2 == std::string::npos) {
-                        std::string vt_str = part.substr(slash1 + 1);
-                        if (!vt_str.empty()) {
-                            vt_idx = std::stoi(vt_str);
-                            has_vt = true;
-                        }
-                    } else {
-                        std::string vt_str = part.substr(slash1 + 1, slash2 - slash1 - 1);
-                        if (!vt_str.empty()) {
-                            vt_idx = std::stoi(vt_str);
-                            has_vt = true;
-                        }
-                        std::string vn_str = part.substr(slash2 + 1);
-                        if (!vn_str.empty()) {
-                            vn_idx = std::stoi(vn_str);
-                            has_vn = true;
-                        }
+        case EString: {
+            std::string val = resolveValue(node.attribute("value").value(), defaults);
+            list.setString(name, val);
+            break;
+        }
+        case EColor: {
+            Vector3f c = parseVectorOrPoint(node, defaults);
+            list.setColor(name, Color3f(c.x, c.y, c.z));
+            break;
+        }
+        case EPoint: {
+            Vector3f p = parseVectorOrPoint(node, defaults);
+            list.setPoint(name, Point3f(p.x, p.y, p.z));
+            break;
+        }
+        case EVector: {
+            Vector3f v = parseVectorOrPoint(node, defaults);
+            list.setVector(name, Vector3f(v.x, v.y, v.z));
+            break;
+        }
+        case ETexture: {
+            std::string filename = resolveValue(node.attribute("filename").value(), defaults);
+            if (filename.empty()) {
+                for (pugi::xml_node ch : node.children()) {
+                    if (getTag(ch.name()) == EString && std::string(ch.attribute("name").value()) == "filename") {
+                        filename = resolveValue(ch.attribute("value").value(), defaults);
                     }
                 }
-
-                if (v_idx < 0) v_idx = (int)verts.size() + v_idx + 1;
-                v_indices.push_back(v_idx - 1);
-
-                if (has_vt) {
-                    if (vt_idx < 0) vt_idx = (int)texcoords.size() + vt_idx + 1;
-                    t_indices.push_back(vt_idx - 1);
-                } else {
-                    t_indices.push_back(-1);
-                }
-
-                if (has_vn) {
-                    if (vn_idx < 0) vn_idx = (int)norms.size() + vn_idx + 1;
-                    n_indices.push_back(vn_idx - 1);
-                } else {
-                    n_indices.push_back(-1);
-                }
             }
-
-            // Fan-triangulate polygons.
-            for (int i = 1; i + 1 < (int)v_indices.size(); ++i) {
-                const int i0 = v_indices[0], i1 = v_indices[i], i2 = v_indices[i + 1];
-                if (i0 < 0 || i1 < 0 || i2 < 0 ||
-                    i0 >= (int)verts.size() ||
-                    i1 >= (int)verts.size() ||
-                    i2 >= (int)verts.size())
-                {
-                    errorOut = "OBJ face index out of range in " + objPath.string();
-                    return false;
-                }
-
-                Triangle tri;
-                tri.p0 = verts[i0];
-                tri.p1 = verts[i1];
-                tri.p2 = verts[i2];
-
-                // Use per-vertex normals when all three are valid.
-                if ((int)n_indices.size() == (int)v_indices.size() &&
-                    n_indices[0]   >= 0 && n_indices[i]   >= 0 && n_indices[i+1] >= 0 &&
-                    n_indices[0]   < (int)norms.size() &&
-                    n_indices[i]   < (int)norms.size() &&
-                    n_indices[i+1] < (int)norms.size())
-                {
-                    tri.n0 = norms[n_indices[0]];
-                    tri.n1 = norms[n_indices[i]];
-                    tri.n2 = norms[n_indices[i+1]];
-                    tri.has_normals = true;
-                } else {
-                    tri.has_normals = false;
-                }
-
-                // Use per-vertex texture coords when all three are valid.
-                if ((int)t_indices.size() == (int)v_indices.size() &&
-                    t_indices[0]   >= 0 && t_indices[i]   >= 0 && t_indices[i+1] >= 0 &&
-                    t_indices[0]   < (int)texcoords.size() &&
-                    t_indices[i]   < (int)texcoords.size() &&
-                    t_indices[i+1] < (int)texcoords.size())
-                {
-                    tri.uv0 = texcoords[t_indices[0]];
-                    tri.uv1 = texcoords[t_indices[i]];
-                    tri.uv2 = texcoords[t_indices[i+1]];
-                    tri.has_uvs = true;
-                } else {
-                    tri.has_uvs = false;
-                }
-
-                tri.material_id = materialId;
-                tri.mesh_id     = meshId;
-                out.triangles.push_back(tri);
+            if (!filename.empty()) {
+                list.setString(name + "_texture", filename);
             }
+            list.setColor(name, Color3f(1.f));
+            break;
         }
-        // vt, mtllib, usemtl, s, o, g - ignored for now (UV support pending)
+        default:
+            break;
     }
+}
 
-    if (verts.empty()) {
-        errorOut = "OBJ file has no vertices: " + objPath.string();
+static void parseProperties(const pugi::xml_node& node, PropertyList& list, const std::unordered_map<std::string, std::string>& defaults) {
+    for (pugi::xml_node child : node.children()) {
+        parseProperty(child, list, defaults);
+    }
+}
+
+static bool flattenBsdfNode(const pugi::xml_node& bsdfNode,
+                     PropertyList& bsdfProps,
+                     std::vector<std::string>& warnings,
+                     const std::unordered_map<std::string, std::string>& defaults)
+{
+    if (!bsdfNode || getTag(bsdfNode.name()) != EBsdf)
         return false;
+
+    const std::string type = bsdfNode.attribute("type").value();
+    if (type == "twosided" || type == "bumpmap" || type == "mask" || type == "normalmap") {
+        const pugi::xml_node inner = bsdfNode.child("bsdf");
+        if (!inner) {
+            warnings.push_back("Found <bsdf type='" + type + "'> without nested <bsdf>; using diffuse fallback.");
+            bsdfProps.setString("type", "diffuse");
+            return true;
+        }
+        return flattenBsdfNode(inner, bsdfProps, warnings, defaults);
     }
 
-    // Build the MeshInstance record.
-    const uint32_t meshTriangleCount = (uint32_t)out.triangles.size() - meshTriangleStart;
-
-    MeshInstance meshInst;
-    meshInst.name          = meshName;
-    meshInst.materialId    = materialId;
-    meshInst.triangleStart = meshTriangleStart;
-    meshInst.triangleCount = meshTriangleCount;
-    meshInst.transform     = transform;
-    meshInst.emitterType   = (emitterId >= 0) ? EmitterType::Area : EmitterType::None;
-    meshInst.emitterId     = emitterId;
-
-    // Compute world-space AABB from the (already-transformed) vertex list.
-    meshInst.boundingBoxMin = verts[0];
-    meshInst.boundingBoxMax = verts[0];
-    for (const auto& v : verts) {
-        meshInst.boundingBoxMin.x = std::min(meshInst.boundingBoxMin.x, v.x);
-        meshInst.boundingBoxMin.y = std::min(meshInst.boundingBoxMin.y, v.y);
-        meshInst.boundingBoxMin.z = std::min(meshInst.boundingBoxMin.z, v.z);
-        meshInst.boundingBoxMax.x = std::max(meshInst.boundingBoxMax.x, v.x);
-        meshInst.boundingBoxMax.y = std::max(meshInst.boundingBoxMax.y, v.y);
-        meshInst.boundingBoxMax.z = std::max(meshInst.boundingBoxMax.z, v.z);
-    }
-
-    out.meshes.push_back(meshInst);
+    bsdfProps.setString("type", type.empty() ? "diffuse" : type);
+    parseProperties(bsdfNode, bsdfProps, defaults);
     return true;
 }
 
-static size_t getPLYTypeSize(const std::string& type) {
-    if (type == "char" || type == "uchar" || type == "int8" || type == "uint8") return 1;
-    if (type == "short" || type == "ushort" || type == "int16" || type == "uint16") return 2;
-    if (type == "int" || type == "uint" || type == "int32" || type == "uint32" || type == "float" || type == "float32") return 4;
-    if (type == "double" || type == "float64") return 8;
-    return 0;
+static void parseTransform(const pugi::xml_node& node, Matrix4f& transform, Matrix4f& normalTransform, const std::unordered_map<std::string, std::string>& defaults) {
+    for (const pugi::xml_node& op : node.children()) {
+        ETag tag = getTag(op.name());
+        switch (tag) {
+            case ETranslate: {
+                const Vector3f t = parseVectorOrPoint(op, defaults);
+                transform = Matrix4f::translate(t) * transform;
+                break;
+            }
+            case EScale: {
+                const Vector3f s = parseVectorOrPoint(op, defaults);
+                transform = Matrix4f::scale(s) * transform;
+                const Vector3f invS(
+                    std::abs(s.x) > 1e-9f ? 1.f / s.x : 1.f,
+                    std::abs(s.y) > 1e-9f ? 1.f / s.y : 1.f,
+                    std::abs(s.z) > 1e-9f ? 1.f / s.z : 1.f
+                );
+                normalTransform = Matrix4f::scale(invS) * normalTransform;
+                break;
+            }
+            case ERotate: {
+                Vector3f axis(0.f);
+                std::string axisStr = resolveValue(op.attribute("axis").value(), defaults);
+                if (!axisStr.empty()) {
+                    axis = parseVec3(axisStr);
+                } else {
+                    std::string xStr = resolveValue(op.attribute("x").value(), defaults);
+                    std::string yStr = resolveValue(op.attribute("y").value(), defaults);
+                    std::string zStr = resolveValue(op.attribute("z").value(), defaults);
+                    if (xStr == "1" || xStr == "true") axis.x = 1.f;
+                    if (yStr == "1" || yStr == "true") axis.y = 1.f;
+                    if (zStr == "1" || zStr == "true") axis.z = 1.f;
+                }
+                float len = length(axis);
+                if (len > 1e-6f) {
+                    axis = axis / len;
+                } else {
+                    axis = Vector3f(1.f, 0.f, 0.f);
+                }
+                const float angle = toF(resolveValue(op.attribute("angle").value(), defaults));
+                transform   = Matrix4f::rotate(axis, angle) * transform;
+                normalTransform = Matrix4f::rotate(axis, angle) * normalTransform;
+                break;
+            }
+            case EMatrix: {
+                Matrix4f explicitM;
+                if (parseMatrix4fValue(resolveValue(op.attribute("value").value(), defaults), explicitM)) {
+                    transform = explicitM;
+                    normalTransform = inverseTransposeUpper3x3(explicitM);
+                }
+                break;
+            }
+            default:
+                break;
+        }
+    }
 }
 
-static int readBinaryInt(std::ifstream& file, const std::string& type) {
-    if (type == "char" || type == "int8" || type == "uchar" || type == "uint8") {
-        uint8_t v = 0; file.read(reinterpret_cast<char*>(&v), 1); return static_cast<int>(v);
-    }
-    if (type == "short" || type == "int16" || type == "ushort" || type == "uint16") {
-        int16_t v = 0; file.read(reinterpret_cast<char*>(&v), 2); return static_cast<int>(v);
-    }
-    if (type == "int" || type == "int32" || type == "uint" || type == "uint32") {
-        int32_t v = 0; file.read(reinterpret_cast<char*>(&v), 4); return static_cast<int>(v);
-    }
-    return 0;
-}
-
-struct PLYProperty {
-    std::string name;
-    std::string type;
-    size_t size = 0;
-    size_t offset = 0;
-};
-
-struct PLYElement {
-    std::string name;
-    size_t count = 0;
-    std::vector<PLYProperty> properties;
-    size_t size = 0;
-};
-
-bool SceneLoader::parseMeshPLY(const std::string& baseDir,
-                               const std::string& plyFilename,
-                               const std::string& meshName,
-                               int                materialId,
-                               int                emitterId,
-                               const Matrix4f&    transform,
-                               const Matrix4f&    normalTransform,
-                               LoadedScene&       out,
-                               std::string&       errorOut)
+static bool parseMesh(const std::string& baseDir,
+               const std::string& objFilename,
+               const std::string& meshName,
+               int                materialId,
+               int                emitterId,
+               const Matrix4f&    transform,
+               const Matrix4f&    normalTransform,
+               CPUScene&          out,
+               std::string&       errorOut)
 {
-    fs::path plyPath = fs::path(baseDir) / plyFilename;
-    std::ifstream file(plyPath, std::ios::binary);
-    if (!file.is_open()) {
-        errorOut = "Cannot open PLY file: " + plyPath.string();
+    fs::path objPath = fs::path(baseDir) / objFilename;
+    tinyobj::ObjReaderConfig reader_config;
+    reader_config.triangulate = true;
+    tinyobj::ObjReader reader;
+
+    if (!reader.ParseFromFile(objPath.string(), reader_config)) {
+        if (!reader.Error().empty()) {
+            errorOut = reader.Error();
+        } else {
+            errorOut = "Cannot open OBJ file: " + objPath.string();
+        }
         return false;
     }
 
-    std::string format;
-    std::vector<PLYElement> elements;
-    PLYElement* currentElement = nullptr;
-
-    std::string line;
-    while (std::getline(file, line)) {
-        while (!line.empty() && (line.back() == '\r' || line.back() == '\n' || line.back() == ' '))
-            line.pop_back();
-        if (line.empty()) continue;
-
-        std::istringstream ss(line);
-        std::string token;
-        ss >> token;
-
-        if (token == "ply") continue;
-        if (token == "comment") continue;
-
-        if (token == "format") {
-            ss >> format;
-            continue;
-        }
-
-        if (token == "element") {
-            std::string elName;
-            size_t elCount;
-            ss >> elName >> elCount;
-            elements.push_back({elName, elCount, {}, 0});
-            currentElement = &elements.back();
-            continue;
-        }
-
-        if (token == "property") {
-            if (!currentElement) {
-                errorOut = "Property declared before element in PLY: " + line;
-                return false;
-            }
-            std::string propType;
-            ss >> propType;
-            if (propType == "list") {
-                std::string countType, indexType, propName;
-                ss >> countType >> indexType >> propName;
-                currentElement->properties.push_back({propName, "list:" + countType + ":" + indexType, 0, 0});
-            } else {
-                std::string propName;
-                ss >> propName;
-                size_t pSize = getPLYTypeSize(propType);
-                currentElement->properties.push_back({propName, propType, pSize, currentElement->size});
-                currentElement->size += pSize;
-            }
-            continue;
-        }
-
-        if (token == "end_header") {
-            break;
-        }
+    if (!reader.Warning().empty()) {
+        out.warnings.push_back("OBJ Warning (" + objFilename + "): " + reader.Warning());
     }
 
-    const PLYElement* vertexElement = nullptr;
-    const PLYElement* faceElement = nullptr;
-    for (const auto& el : elements) {
-        if (el.name == "vertex") vertexElement = &el;
-        else if (el.name == "face") faceElement = &el;
-    }
-
-    if (!vertexElement || vertexElement->count == 0) {
-        errorOut = "PLY file has no vertex element or count is 0.";
-        return false;
-    }
-
-    int xIdx = -1, yIdx = -1, zIdx = -1;
-    int nxIdx = -1, nyIdx = -1, nzIdx = -1;
-    int uIdx = -1, vIdx = -1;
-
-    for (int i = 0; i < (int)vertexElement->properties.size(); ++i) {
-        const auto& prop = vertexElement->properties[i];
-        if (prop.name == "x") xIdx = i;
-        else if (prop.name == "y") yIdx = i;
-        else if (prop.name == "z") zIdx = i;
-        else if (prop.name == "nx") nxIdx = i;
-        else if (prop.name == "ny") nyIdx = i;
-        else if (prop.name == "nz") nzIdx = i;
-        else if (prop.name == "u" || prop.name == "s" || prop.name == "texture_u") uIdx = i;
-        else if (prop.name == "v" || prop.name == "t" || prop.name == "texture_v") vIdx = i;
-    }
-
-    if (xIdx < 0 || yIdx < 0 || zIdx < 0) {
-        errorOut = "PLY vertex element missing x, y, or z coordinates.";
-        return false;
-    }
-
-    bool hasNormals = (nxIdx >= 0 && nyIdx >= 0 && nzIdx >= 0);
-    bool hasUVs = (uIdx >= 0 && vIdx >= 0);
-
-    std::vector<Point3f> verts(vertexElement->count);
-    std::vector<Vector3f> norms(hasNormals ? vertexElement->count : 0);
-    std::vector<Point2f> texcoords(hasUVs ? vertexElement->count : 0);
-
-    if (format == "binary_little_endian" || format == "binary_little_endian 1.0") {
-        std::vector<char> vertexBuffer(vertexElement->count * vertexElement->size);
-        file.read(vertexBuffer.data(), vertexBuffer.size());
-        if (!file) {
-            errorOut = "Failed to read binary vertex data in " + plyPath.string();
-            return false;
-        }
-
-        const char* ptr = vertexBuffer.data();
-        for (size_t i = 0; i < vertexElement->count; ++i) {
-            const char* vPtr = ptr + i * vertexElement->size;
-            
-            auto getVal = [&](int idx) -> float {
-                const auto& prop = vertexElement->properties[idx];
-                const char* pVal = vPtr + prop.offset;
-                if (prop.type == "float" || prop.type == "float32") {
-                    float v; std::memcpy(&v, pVal, 4); return v;
-                }
-                if (prop.type == "double" || prop.type == "float64") {
-                    double v; std::memcpy(&v, pVal, 8); return static_cast<float>(v);
-                }
-                if (prop.type == "int" || prop.type == "int32") {
-                    int32_t v; std::memcpy(&v, pVal, 4); return static_cast<float>(v);
-                }
-                if (prop.type == "uint" || prop.type == "uint32") {
-                    uint32_t v; std::memcpy(&v, pVal, 4); return static_cast<float>(v);
-                }
-                if (prop.type == "uchar" || prop.type == "uint8") {
-                    return static_cast<float>(static_cast<uint8_t>(*pVal));
-                }
-                if (prop.type == "char" || prop.type == "int8") {
-                    return static_cast<float>(static_cast<int8_t>(*pVal));
-                }
-                if (prop.type == "short" || prop.type == "int16") {
-                    int16_t v; std::memcpy(&v, pVal, 2); return static_cast<float>(v);
-                }
-                if (prop.type == "ushort" || prop.type == "uint16") {
-                    uint16_t v; std::memcpy(&v, pVal, 2); return static_cast<float>(v);
-                }
-                return 0.f;
-            };
-
-            Point3f p(getVal(xIdx), getVal(yIdx), getVal(zIdx));
-            p = transform * p;
-            verts[i] = p;
-
-            if (hasNormals) {
-                Vector3f n(getVal(nxIdx), getVal(nyIdx), getVal(nzIdx));
-                n = normalize(normalTransform * n);
-                norms[i] = n;
-            }
-
-            if (hasUVs) {
-                texcoords[i] = Point2f(getVal(uIdx), getVal(vIdx));
-            }
-        }
-    } else if (format == "ascii" || format == "ascii 1.0") {
-        for (size_t i = 0; i < vertexElement->count; ++i) {
-            std::string vLine;
-            if (!std::getline(file, vLine)) {
-                errorOut = "Unexpected end of file while reading ASCII vertices.";
-                return false;
-            }
-            std::istringstream vss(vLine);
-            std::vector<float> values;
-            float val;
-            while (vss >> val) values.push_back(val);
-            if (values.size() < vertexElement->properties.size()) {
-                errorOut = "Too few values in PLY vertex line: " + vLine;
-                return false;
-            }
-
-            Point3f p(values[xIdx], values[yIdx], values[zIdx]);
-            p = transform * p;
-            verts[i] = p;
-
-            if (hasNormals) {
-                Vector3f n(values[nxIdx], values[nyIdx], values[nzIdx]);
-                n = normalize(normalTransform * n);
-                norms[i] = n;
-            }
-
-            if (hasUVs) {
-                texcoords[i] = Point2f(values[uIdx], values[vIdx]);
-            }
-        }
-    } else {
-        errorOut = "Unsupported PLY format: " + format;
-        return false;
-    }
-
-    if (!faceElement || faceElement->count == 0) {
-        errorOut = "PLY file has no face element or count is 0.";
-        return false;
-    }
-
-    if (faceElement->properties.empty()) {
-        errorOut = "PLY face element has no properties.";
-        return false;
-    }
-
-    const auto& faceProp = faceElement->properties[0];
-    if (faceProp.type.rfind("list:", 0) != 0) {
-        errorOut = "PLY face property is not a list type: " + faceProp.type;
-        return false;
-    }
-
-    std::string countType, indexType;
-    {
-        std::istringstream lss(faceProp.type);
-        std::string dummy, cT, iT;
-        std::getline(lss, dummy, ':');
-        std::getline(lss, cT, ':');
-        std::getline(lss, iT, ':');
-        countType = cT;
-        indexType = iT;
-    }
+    const auto& attrib = reader.GetAttrib();
+    const auto& shapes = reader.GetShapes();
 
     const uint32_t meshTriangleStart = (uint32_t)out.triangles.size();
     const int meshId = (int)out.meshes.size();
+    
+    AABB bbox;
 
-    if (format == "binary_little_endian" || format == "binary_little_endian 1.0") {
-        for (size_t f = 0; f < faceElement->count; ++f) {
-            int count = readBinaryInt(file, countType);
-            if (count < 3) {
-                errorOut = "Face has fewer than 3 vertices.";
-                return false;
+    for (size_t s = 0; s < shapes.size(); s++) {
+        size_t index_offset = 0;
+        for (size_t f = 0; f < shapes[s].mesh.num_face_vertices.size(); f++) {
+            size_t fv = size_t(shapes[s].mesh.num_face_vertices[f]);
+            if (fv != 3) {
+                index_offset += fv;
+                continue;
             }
-            std::vector<int> faceIndices(count);
-            for (int i = 0; i < count; ++i) {
-                faceIndices[i] = readBinaryInt(file, indexType);
-            }
 
-            for (int i = 1; i + 1 < count; ++i) {
-                int i0 = faceIndices[0];
-                int i1 = faceIndices[i];
-                int i2 = faceIndices[i + 1];
+            Triangle tri;
+            tri.material_id = materialId;
+            tri.mesh_id = meshId;
 
-                if (i0 < 0 || i0 >= (int)verts.size() ||
-                    i1 < 0 || i1 >= (int)verts.size() ||
-                    i2 < 0 || i2 >= (int)verts.size()) {
-                    errorOut = "PLY face vertex index out of bounds.";
-                    return false;
-                }
+            Point3f pts[3];
+            Vector3f norms[3];
+            Point2f uvs[3];
+            bool has_n = true;
+            bool has_uv = true;
 
-                Triangle tri;
-                tri.p0 = verts[i0];
-                tri.p1 = verts[i1];
-                tri.p2 = verts[i2];
+            for (size_t v = 0; v < 3; v++) {
+                tinyobj::index_t idx = shapes[s].mesh.indices[index_offset + v];
+                float vx = attrib.vertices[3 * size_t(idx.vertex_index) + 0];
+                float vy = attrib.vertices[3 * size_t(idx.vertex_index) + 1];
+                float vz = attrib.vertices[3 * size_t(idx.vertex_index) + 2];
+                pts[v] = transform * Point3f(vx, vy, vz);
 
-                if (hasNormals) {
-                    tri.n0 = norms[i0];
-                    tri.n1 = norms[i1];
-                    tri.n2 = norms[i2];
-                    tri.has_normals = true;
+                bbox.grow(pts[v]);
+
+                if (idx.normal_index >= 0) {
+                    float nx = attrib.normals[3 * size_t(idx.normal_index) + 0];
+                    float ny = attrib.normals[3 * size_t(idx.normal_index) + 1];
+                    float nz = attrib.normals[3 * size_t(idx.normal_index) + 2];
+                    norms[v] = normalize(normalTransform * Vector3f(nx, ny, nz));
                 } else {
-                    tri.has_normals = false;
+                    has_n = false;
                 }
 
-                if (hasUVs) {
-                    tri.uv0 = texcoords[i0];
-                    tri.uv1 = texcoords[i1];
-                    tri.uv2 = texcoords[i2];
-                    tri.has_uvs = true;
+                if (idx.texcoord_index >= 0) {
+                    float tx = attrib.texcoords[2 * size_t(idx.texcoord_index) + 0];
+                    float ty = attrib.texcoords[2 * size_t(idx.texcoord_index) + 1];
+                    uvs[v] = Point2f(tx, ty);
                 } else {
-                    tri.has_uvs = false;
+                    has_uv = false;
                 }
-
-                tri.material_id = materialId;
-                tri.mesh_id = meshId;
-                out.triangles.push_back(tri);
             }
+
+            tri.p0 = pts[0]; tri.p1 = pts[1]; tri.p2 = pts[2];
+            if (has_n) {
+                tri.n0 = norms[0]; tri.n1 = norms[1]; tri.n2 = norms[2];
+                tri.has_normals = true;
+            } else {
+                tri.has_normals = false;
+            }
+            if (has_uv) {
+                tri.uv0 = uvs[0]; tri.uv1 = uvs[1]; tri.uv2 = uvs[2];
+                tri.has_uvs = true;
+            } else {
+                tri.has_uvs = false;
+            }
+
+            out.triangles.push_back(tri);
+            index_offset += fv;
         }
-    } else {
-        for (size_t f = 0; f < faceElement->count; ++f) {
-            std::string fLine;
-            if (!std::getline(file, fLine)) {
-                errorOut = "Unexpected end of file while reading ASCII faces.";
-                return false;
-            }
-            std::istringstream fss(fLine);
-            int count;
-            if (!(fss >> count)) {
-                errorOut = "Failed to read face vertex count.";
-                return false;
-            }
-            if (count < 3) {
-                errorOut = "Face has fewer than 3 vertices.";
-                return false;
-            }
-            std::vector<int> faceIndices(count);
-            for (int i = 0; i < count; ++i) {
-                fss >> faceIndices[i];
-            }
+    }
 
-            for (int i = 1; i + 1 < count; ++i) {
-                int i0 = faceIndices[0];
-                int i1 = faceIndices[i];
-                int i2 = faceIndices[i + 1];
-
-                if (i0 < 0 || i0 >= (int)verts.size() ||
-                    i1 < 0 || i1 >= (int)verts.size() ||
-                    i2 < 0 || i2 >= (int)verts.size()) {
-                    errorOut = "PLY face vertex index out of bounds.";
-                    return false;
-                }
-
-                Triangle tri;
-                tri.p0 = verts[i0];
-                tri.p1 = verts[i1];
-                tri.p2 = verts[i2];
-
-                if (hasNormals) {
-                    tri.n0 = norms[i0];
-                    tri.n1 = norms[i1];
-                    tri.n2 = norms[i2];
-                    tri.has_normals = true;
-                } else {
-                    tri.has_normals = false;
-                }
-
-                if (hasUVs) {
-                    tri.uv0 = texcoords[i0];
-                    tri.uv1 = texcoords[i1];
-                    tri.uv2 = texcoords[i2];
-                    tri.has_uvs = true;
-                } else {
-                    tri.has_uvs = false;
-                }
-
-                tri.material_id = materialId;
-                tri.mesh_id = meshId;
-                out.triangles.push_back(tri);
-            }
-        }
+    if (out.triangles.size() == meshTriangleStart) {
+        errorOut = "OBJ file has no triangles: " + objPath.string();
+        return false;
     }
 
     const uint32_t meshTriangleCount = (uint32_t)out.triangles.size() - meshTriangleStart;
 
     MeshInstance meshInst;
-    meshInst.name          = meshName;
     meshInst.materialId    = materialId;
     meshInst.triangleStart = meshTriangleStart;
     meshInst.triangleCount = meshTriangleCount;
     meshInst.transform     = transform;
     meshInst.emitterType   = (emitterId >= 0) ? EmitterType::Area : EmitterType::None;
     meshInst.emitterId     = emitterId;
-
-    meshInst.boundingBoxMin = verts[0];
-    meshInst.boundingBoxMax = verts[0];
-    for (const auto& v : verts) {
-        meshInst.boundingBoxMin.x = std::min(meshInst.boundingBoxMin.x, v.x);
-        meshInst.boundingBoxMin.y = std::min(meshInst.boundingBoxMin.y, v.y);
-        meshInst.boundingBoxMin.z = std::min(meshInst.boundingBoxMin.z, v.z);
-        meshInst.boundingBoxMax.x = std::max(meshInst.boundingBoxMax.x, v.x);
-        meshInst.boundingBoxMax.y = std::max(meshInst.boundingBoxMax.y, v.y);
-        meshInst.boundingBoxMax.z = std::max(meshInst.boundingBoxMax.z, v.z);
-    }
+    meshInst.bbox          = bbox;
 
     out.meshes.push_back(meshInst);
+    out.meshNames.push_back(meshName);
     return true;
 }
 
-// ---------------------------------------------------------------------------
-// Camera parser
-// ---------------------------------------------------------------------------
-bool SceneLoader::parseCamera(const std::string& originStr,
-                               const std::string& targetStr,
-                               const std::string& upStr,
-                               float              fov,
-                               LoadedScene&       out,
-                               std::string&       /*errorOut*/)
+static bool parseMeshPLY(const std::string& baseDir,
+                  const std::string& plyFilename,
+                  const std::string& meshName,
+                  int                materialId,
+                  int                emitterId,
+                  const Matrix4f&    transform,
+                  const Matrix4f&    normalTransform,
+                  CPUScene&          out,
+                  std::string&       errorOut)
+{
+    fs::path plyPath = fs::path(baseDir) / plyFilename;
+    try {
+        happly::PLYData plyIn(plyPath.string());
+        
+        std::vector<std::array<double, 3>> vPos = plyIn.getVertexPositions();
+        
+        bool hasNormals = plyIn.getElement("vertex").hasProperty("nx") && 
+                          plyIn.getElement("vertex").hasProperty("ny") && 
+                          plyIn.getElement("vertex").hasProperty("nz");
+        
+        std::vector<std::array<double, 3>> vNormals;
+        if (hasNormals) {
+            vNormals.resize(vPos.size());
+            std::vector<double> nx = plyIn.getElement("vertex").getProperty<double>("nx");
+            std::vector<double> ny = plyIn.getElement("vertex").getProperty<double>("ny");
+            std::vector<double> nz = plyIn.getElement("vertex").getProperty<double>("nz");
+            for(size_t i=0; i<vPos.size(); i++) {
+                vNormals[i] = {nx[i], ny[i], nz[i]};
+            }
+        }
+        
+        bool hasUVs = false;
+        std::vector<std::array<double, 2>> vUVs;
+        if (plyIn.getElement("vertex").hasProperty("u") && plyIn.getElement("vertex").hasProperty("v")) {
+            hasUVs = true;
+            std::vector<double> u = plyIn.getElement("vertex").getProperty<double>("u");
+            std::vector<double> v = plyIn.getElement("vertex").getProperty<double>("v");
+            vUVs.resize(vPos.size());
+            for(size_t i=0; i<vPos.size(); i++) vUVs[i] = {u[i], v[i]};
+        } else if (plyIn.getElement("vertex").hasProperty("s") && plyIn.getElement("vertex").hasProperty("t")) {
+            hasUVs = true;
+            std::vector<double> s = plyIn.getElement("vertex").getProperty<double>("s");
+            std::vector<double> t = plyIn.getElement("vertex").getProperty<double>("t");
+            vUVs.resize(vPos.size());
+            for(size_t i=0; i<vPos.size(); i++) vUVs[i] = {s[i], t[i]};
+        }
+
+        std::vector<std::vector<size_t>> fInd = plyIn.getFaceIndices<size_t>();
+
+        const uint32_t meshTriangleStart = (uint32_t)out.triangles.size();
+        const int meshId = (int)out.meshes.size();
+        
+        AABB bbox;
+
+        for (const auto& face : fInd) {
+            if (face.size() < 3) continue;
+            for (size_t i = 1; i + 1 < face.size(); ++i) {
+                Triangle tri;
+                tri.material_id = materialId;
+                tri.mesh_id = meshId;
+
+                size_t idx0 = face[0];
+                size_t idx1 = face[i];
+                size_t idx2 = face[i+1];
+
+                tri.p0 = transform * Point3f((float)vPos[idx0][0], (float)vPos[idx0][1], (float)vPos[idx0][2]);
+                tri.p1 = transform * Point3f((float)vPos[idx1][0], (float)vPos[idx1][1], (float)vPos[idx1][2]);
+                tri.p2 = transform * Point3f((float)vPos[idx2][0], (float)vPos[idx2][1], (float)vPos[idx2][2]);
+
+                bbox.grow(tri.p0);
+                bbox.grow(tri.p1);
+                bbox.grow(tri.p2);
+
+                if (hasNormals) {
+                    tri.n0 = normalize(normalTransform * Vector3f((float)vNormals[idx0][0], (float)vNormals[idx0][1], (float)vNormals[idx0][2]));
+                    tri.n1 = normalize(normalTransform * Vector3f((float)vNormals[idx1][0], (float)vNormals[idx1][1], (float)vNormals[idx1][2]));
+                    tri.n2 = normalize(normalTransform * Vector3f((float)vNormals[idx2][0], (float)vNormals[idx2][1], (float)vNormals[idx2][2]));
+                    tri.has_normals = true;
+                } else {
+                    tri.has_normals = false;
+                }
+
+                if (hasUVs) {
+                    tri.uv0 = Point2f((float)vUVs[idx0][0], (float)vUVs[idx0][1]);
+                    tri.uv1 = Point2f((float)vUVs[idx1][0], (float)vUVs[idx1][1]);
+                    tri.uv2 = Point2f((float)vUVs[idx2][0], (float)vUVs[idx2][1]);
+                    tri.has_uvs = true;
+                } else {
+                    tri.has_uvs = false;
+                }
+
+                out.triangles.push_back(tri);
+            }
+        }
+
+        if (out.triangles.size() == meshTriangleStart) {
+            errorOut = "PLY file has no triangles: " + plyPath.string();
+            return false;
+        }
+
+        const uint32_t meshTriangleCount = (uint32_t)out.triangles.size() - meshTriangleStart;
+
+        MeshInstance meshInst;
+        meshInst.materialId    = materialId;
+        meshInst.triangleStart = meshTriangleStart;
+        meshInst.triangleCount = meshTriangleCount;
+        meshInst.transform     = transform;
+        meshInst.emitterType   = (emitterId >= 0) ? EmitterType::Area : EmitterType::None;
+        meshInst.emitterId     = emitterId;
+        meshInst.bbox          = bbox;
+
+        out.meshes.push_back(meshInst);
+        out.meshNames.push_back(meshName);
+        return true;
+    } catch (const std::exception& e) {
+        errorOut = std::string("Error parsing PLY: ") + e.what();
+        return false;
+    }
+}
+
+static bool parseCamera(const std::string& originStr,
+                 const std::string& targetStr,
+                 const std::string& upStr,
+                 float              fov,
+                 CPUScene&          out,
+                 std::string&       /*errorOut*/)
 {
     const Vector3f o = parseVec3(originStr);
     const Vector3f t = parseVec3(targetStr);
     const Vector3f u = parseVec3(upStr);
 
-    out.camOrigin = Point3f(o.x, o.y, o.z);
-    out.camTarget = Point3f(t.x, t.y, t.z);
-    out.camUp     = u;
-    out.camFov    = fov;
-    out.hasCamera = true;
+    out.camera.origin = Point3f(o.x, o.y, o.z);
+    out.camera.target = Point3f(t.x, t.y, t.z);
+    out.camera.up     = u;
+    out.camera.fov    = fov;
+    out.camera.hasCamera = true;
     return true;
 }
 
-// ---------------------------------------------------------------------------
-// Main entry point
-// ---------------------------------------------------------------------------
+} // anonymous namespace
+
 bool SceneLoader::load(const std::string& xmlPath,
-                        LoadedScene&       out,
-                        std::string&       errorOut)
+                       CPUScene&          out,
+                       std::string&       errorOut)
 {
-    out = LoadedScene();
+    out = CPUScene();
 
     pugi::xml_document     doc;
     pugi::xml_parse_result result = doc.load_file(xmlPath.c_str());
@@ -963,19 +640,9 @@ bool SceneLoader::load(const std::string& xmlPath,
             defaults[key] = val;
     }
 
-    const auto resolveValue = [&defaults](const std::string& raw) -> std::string {
-        if (raw.size() > 1 && raw[0] == '$') {
-            const std::string key = raw.substr(1);
-            const auto it = defaults.find(key);
-            if (it != defaults.end())
-                return it->second;
-        }
-        return raw;
-    };
-
-    // First pass: collect top-level BSDF definitions so <ref id="..."/> on shapes can resolve.
+    // First pass: collect top-level BSDF definitions
     for (const pugi::xml_node& node : root.children()) {
-        if (std::string(node.name()) != "bsdf")
+        if (getTag(node.name()) != EBsdf)
             continue;
 
         std::string bsdfId = node.attribute("id").value();
@@ -990,9 +657,7 @@ bool SceneLoader::load(const std::string& xmlPath,
             continue;
 
         PropertyList bsdfProps;
-        if (!flattenBsdfNode(node, bsdfProps, out.warnings,
-            [this](const std::string& s) { return this->parseVec3(s); },
-            resolveValue))
+        if (!flattenBsdfNode(node, bsdfProps, out.warnings, defaults))
             continue;
 
         const int materialId = (int)out.materials.size();
@@ -1007,322 +672,223 @@ bool SceneLoader::load(const std::string& xmlPath,
     }
 
     for (const pugi::xml_node& node : root.children()) {
-        const std::string name = node.name();
+        ETag tag = getTag(node.name());
 
-        // ----------------------------------------------------------------
-        // <mesh> (legacy) and <shape> (Mitsuba-style)
-        // ----------------------------------------------------------------
-        if (name == "mesh" || name == "shape") {
-            try {
-                PropertyList meshProps;
-                fillPropertyList(node, meshProps,
-                    [this](const std::string& s) { return this->parseVec3(s); },
-                    resolveValue);
+        switch (tag) {
+            case EMesh: {
+                try {
+                    PropertyList meshProps;
+                    parseProperties(node, meshProps, defaults);
 
-                const std::string shapeType = (name == "shape")
-                    ? std::string(node.attribute("type").value())
-                    : std::string("obj");
+                    const std::string shapeType = (std::string(node.name()) == "shape")
+                        ? std::string(node.attribute("type").value())
+                        : std::string("obj");
 
-                std::string objFile;
-                if (shapeType == "obj" || shapeType == "ply" || name == "mesh")
-                    objFile = meshProps.getString("filename");
+                    std::string objFile;
+                    if (shapeType == "obj" || shapeType == "ply" || std::string(node.name()) == "mesh")
+                        objFile = meshProps.getString("filename");
 
-                std::string meshName = node.attribute("id").value();
-                if (meshName.empty()) {
-                    meshName = (objFile.empty() ? shapeType : fs::path(objFile).stem().string());
-                    if (meshName.empty())
-                        meshName = "mesh_" + std::to_string(nextMatId);
-                }
-
-                PropertyList bsdfProps, emitterProps;
-                int materialId = -1;
-                int emitterId = -1;
-
-                bool hasMedium = false;
-                Color3f mediumSigmaT(1.f);
-                Color3f mediumAlbedo(1.f);
-                float mediumScale = 1.f;
-                float mediumG = 0.f;
-
-                // Start with identity transforms.
-                Matrix4f meshTransform;    // forward transform (for positions)
-                Matrix4f normalTransform;  // inverse-transpose (for normals)
-
-                for (const pugi::xml_node& child : node.children()) {
-                    const std::string cn = child.name();
-
-                    if (cn == "bsdf") {
-                        flattenBsdfNode(child, bsdfProps, out.warnings,
-                            [this](const std::string& s) { return this->parseVec3(s); },
-                            resolveValue);
+                    std::string meshName = node.attribute("id").value();
+                    if (meshName.empty()) {
+                        meshName = (objFile.empty() ? shapeType : fs::path(objFile).stem().string());
+                        if (meshName.empty())
+                            meshName = "mesh_" + std::to_string(nextMatId);
                     }
-                    else if (cn == "ref") {
-                        const std::string refId = child.attribute("id").value();
-                        auto it = bsdfIdToMaterial.find(refId);
-                        if (it != bsdfIdToMaterial.end()) {
-                            materialId = it->second;
-                        } else {
-                            out.warnings.push_back("Shape references unknown BSDF id '" + refId + "'; using diffuse fallback.");
-                        }
-                    }
-                    else if (cn == "emitter") {
-                        const std::string emitterType = child.attribute("type").value();
-                        fillPropertyList(child, emitterProps,
-                            [this](const std::string& s) { return this->parseVec3(s); },
-                            resolveValue);
 
-                        EmitterInstance inst = makeEmitterFromPropertyLists(
-                            emitterType, emitterProps, out.warnings);
-                        if (inst.type != EmitterType::None) {
-                            emitterId = (int)out.emitters.size();
-                            out.emitters.push_back(inst);
-                        }
-                    }
-                    else if (cn == "medium") {
-                        const std::string mediumType = child.attribute("type").value();
-                        if (mediumType == "homogeneous") {
-                            hasMedium = true;
-                            PropertyList medProps;
-                            fillPropertyList(child, medProps,
-                                [this](const std::string& s) { return this->parseVec3(s); },
-                                resolveValue);
-                            mediumSigmaT = medProps.getColor("sigma_t", Color3f(1.f));
-                            mediumAlbedo = medProps.getColor("albedo", Color3f(1.f));
-                            mediumScale = medProps.getFloat("scale", 1.f);
-                            mediumG = medProps.getFloat("g", 0.f);
-                            for (const pugi::xml_node& mchild : child.children()) {
-                                if (std::string(mchild.name()) == "phase") {
-                                    PropertyList phaseProps;
-                                    fillPropertyList(mchild, phaseProps,
-                                        [this](const std::string& s) { return this->parseVec3(s); },
-                                        resolveValue);
-                                    mediumG = phaseProps.getFloat("g", 0.f);
-                                }
-                            }
-                        }
-                    }
-                    else if (cn == "boolean") {
-                        const std::string propName = child.attribute("name").value();
-                        if (propName == "face_normals") {
-                            const bool faceNormals = std::string(child.attribute("value").value()) == "true"
-                                                  || std::string(child.attribute("value").value()) == "1";
-                            if (faceNormals) {
-                                // face_normals=true means flat shading. Current renderer uses a global toggle.
-                                // Keep global behavior and warn once per shape to avoid silent mismatch.
-                                out.warnings.push_back("Per-shape 'face_normals' requested; renderer currently uses global normal interpolation toggle.");
-                            }
-                        }
-                    }                    else if (cn == "transform") {
-                        for (const pugi::xml_node& tchild : child.children()) {
-                            const std::string tname = tchild.name();
+                    PropertyList bsdfProps, emitterProps;
+                    int materialId = -1;
+                    int emitterId = -1;
 
-                            if (tname == "translate") {
-                                const Vector3f t = parseVectorOrPoint(tchild, [this](const std::string& s) { return this->parseVec3(s); }, resolveValue);
-                                meshTransform = Matrix4f::translate(t) * meshTransform;
-                                // Translations do not affect normals - normalTransform unchanged.
-                            }
-                            else if (tname == "scale") {
-                                const Vector3f s = parseVectorOrPoint(tchild, [this](const std::string& s) { return this->parseVec3(s); }, resolveValue);
-                                meshTransform = Matrix4f::scale(s) * meshTransform;
-                                // Normal scale = (M^{-1})^T = reciprocal scale.
-                                // Guard against zero components.
-                                const Vector3f invS(
-                                    std::abs(s.x) > 1e-9f ? 1.f / s.x : 1.f,
-                                    std::abs(s.y) > 1e-9f ? 1.f / s.y : 1.f,
-                                    std::abs(s.z) > 1e-9f ? 1.f / s.z : 1.f
-                                );
-                                normalTransform = Matrix4f::scale(invS) * normalTransform;
-                            }
-                            else if (tname == "rotate") {
-                                Vector3f axis(0.f);
-                                std::string axisStr = resolveValue(tchild.attribute("axis").value());
-                                if (!axisStr.empty()) {
-                                    axis = parseVec3(axisStr);
+                    Matrix4f meshTransform;
+                    Matrix4f normalTransform;
+
+                    for (const pugi::xml_node& child : node.children()) {
+                        ETag cTag = getTag(child.name());
+                        switch (cTag) {
+                            case EBsdf:
+                                flattenBsdfNode(child, bsdfProps, out.warnings, defaults);
+                                break;
+                            case ERef: {
+                                const std::string refId = child.attribute("id").value();
+                                auto it = bsdfIdToMaterial.find(refId);
+                                if (it != bsdfIdToMaterial.end()) {
+                                    materialId = it->second;
                                 } else {
-                                    std::string xStr = resolveValue(tchild.attribute("x").value());
-                                    std::string yStr = resolveValue(tchild.attribute("y").value());
-                                    std::string zStr = resolveValue(tchild.attribute("z").value());
-                                    if (xStr == "1" || xStr == "true") axis.x = 1.f;
-                                    if (yStr == "1" || yStr == "true") axis.y = 1.f;
-                                    if (zStr == "1" || zStr == "true") axis.z = 1.f;
+                                    out.warnings.push_back("Shape references unknown BSDF id '" + refId + "'; using diffuse fallback.");
                                 }
-                                float len = length(axis);
-                                if (len > 1e-6f) {
-                                    axis = axis / len;
-                                } else {
-                                    axis = Vector3f(1.f, 0.f, 0.f);
-                                }
-                                const float angle = toF(resolveValue(tchild.attribute("angle").value()));
-                                meshTransform   = Matrix4f::rotate(axis, angle) * meshTransform;
-                                // For rotations R^{-T} = R (orthogonal matrix).
-                                normalTransform = Matrix4f::rotate(axis, angle) * normalTransform;
+                                break;
                             }
-                            else if (tname == "matrix") {
-                                Matrix4f explicitM;
-                                if (parseMatrix4fValue(resolveValue(tchild.attribute("value").value()), explicitM)) {
-                                    meshTransform = explicitM;
-                                    normalTransform = inverseTransposeUpper3x3(explicitM);
+                            case EEmitter: {
+                                const std::string emitterType = child.attribute("type").value();
+                                parseProperties(child, emitterProps, defaults);
+
+                                EmitterInstance inst = makeEmitterFromPropertyLists(
+                                    emitterType, emitterProps, out.warnings);
+                                if (inst.type != EmitterType::None) {
+                                    emitterId = (int)out.emitters.size();
+                                    out.emitters.push_back(inst);
                                 }
+                                break;
                             }
+                            case EBoolean: {
+                                const std::string propName = child.attribute("name").value();
+                                if (propName == "face_normals") {
+                                    const bool faceNormals = std::string(child.attribute("value").value()) == "true"
+                                                          || std::string(child.attribute("value").value()) == "1";
+                                    if (faceNormals) {
+                                        out.warnings.push_back("Per-shape 'face_normals' requested; renderer currently uses global normal interpolation toggle.");
+                                    }
+                                }
+                                break;
+                            }
+                            case ETransform: {
+                                parseTransform(child, meshTransform, normalTransform, defaults);
+                                break;
+                            }
+                            default:
+                                break;
                         }
                     }
-                }
 
-                if (materialId < 0) {
-                    out.materials.emplace_back(
-                        makeMaterialFromPropertyLists(bsdfProps, emitterProps, out.warnings));
-                    materialId = (int)out.materials.size() - 1;
+                    if (materialId < 0) {
+                        out.materials.emplace_back(
+                            makeMaterialFromPropertyLists(bsdfProps, emitterProps, out.warnings));
+                        materialId = (int)out.materials.size() - 1;
 
-                    std::string texPath;
-                    if (bsdfProps.hasProperty("reflectance_texture")) texPath = bsdfProps.getString("reflectance_texture");
-                    else if (bsdfProps.hasProperty("diffuse_reflectance_texture")) texPath = bsdfProps.getString("diffuse_reflectance_texture");
-                    else if (bsdfProps.hasProperty("specular_reflectance_texture")) texPath = bsdfProps.getString("specular_reflectance_texture");
-                    out.materialTexturePaths.push_back(texPath);
-                }
-
-                if (shapeType == "obj" || name == "mesh") {
-                    if (!parseMesh(baseDir, objFile, meshName, materialId,
-                                   emitterId, meshTransform, normalTransform, out, errorOut))
-                        return false;
-                } else if (shapeType == "ply") {
-                    if (!parseMeshPLY(baseDir, objFile, meshName, materialId,
-                                      emitterId, meshTransform, normalTransform, out, errorOut))
-                        return false;
-                } else if (shapeType == "rectangle") {
-                    appendRectangleShape(meshName, materialId, emitterId,
-                                         meshTransform, normalTransform, out);
-                } else if (shapeType == "sphere") {
-                    float radius = meshProps.getFloat("radius", 1.f);
-                    Point3f center = meshProps.getPoint("center", Point3f(0.f));
-                    appendSphereShape(meshName, radius, center, materialId, emitterId,
-                                      meshTransform, normalTransform, out);
-                } else if (shapeType == "cube") {
-                    appendCubeShape(meshName, materialId, emitterId,
-                                    meshTransform, normalTransform, out);
-                } else if (shapeType == "disk") {
-                    appendDiskShape(meshName, materialId, emitterId,
-                                    meshTransform, normalTransform, out);
-                } else {
-                    out.warnings.push_back("Unsupported shape type '" + shapeType + "'; skipping shape '" + meshName + "'.");
-                }
-
-                if (hasMedium) {
-                    out.hasMedium = true;
-                    out.mediumMeshId = (int)out.meshes.size() - 1;
-                    out.mediumSigmaT = mediumSigmaT * mediumScale;
-                    out.mediumSigmaS = mediumAlbedo * out.mediumSigmaT;
-                    out.mediumSigmaA = out.mediumSigmaT - out.mediumSigmaS;
-                    out.mediumG = mediumG;
-                }
-
-                ++nextMatId;
-
-            } catch (const std::exception& e) {
-                errorOut = std::string("Mesh parse error: ") + e.what();
-                return false;
-            }
-        }
-
-        // ----------------------------------------------------------------
-        // <emitter type="envmap"> (Mitsuba-style environment lighting)
-        // ----------------------------------------------------------------
-        else if (name == "emitter") {
-            const std::string emitterType = node.attribute("type").value();
-            if (emitterType == "envmap") {
-                PropertyList envProps;
-                fillPropertyList(node, envProps,
-                    [this](const std::string& s) { return this->parseVec3(s); },
-                    resolveValue);
-
-                Matrix4f envTransform;
-                bool hasTransform = false;
-                for (const pugi::xml_node& child : node.children()) {
-                    if (std::string(child.name()) != "transform")
-                        continue;
-                    const pugi::xml_node mnode = child.child("matrix");
-                    if (mnode && parseMatrix4fValue(resolveValue(mnode.attribute("value").value()), envTransform)) {
-                        hasTransform = true;
+                        std::string texPath;
+                        if (bsdfProps.hasProperty("reflectance_texture")) texPath = bsdfProps.getString("reflectance_texture");
+                        else if (bsdfProps.hasProperty("diffuse_reflectance_texture")) texPath = bsdfProps.getString("diffuse_reflectance_texture");
+                        else if (bsdfProps.hasProperty("specular_reflectance_texture")) texPath = bsdfProps.getString("specular_reflectance_texture");
+                        out.materialTexturePaths.push_back(texPath);
                     }
-                }
 
-                const std::string filename = envProps.getString("filename", std::string());
-                if (filename.empty()) {
-                    out.warnings.push_back("envmap emitter missing filename; background will remain black.");
-                    continue;
-                }
-
-                if (!loadEnvMapHDR(filename, baseDir, out.envMapPixels, out.envMapWidth, out.envMapHeight, errorOut))
-                    return false;
-
-                out.hasEnvMap = true;
-                out.envMapToWorld = hasTransform ? envTransform : Matrix4f();
-            } else if (emitterType == "constant") {
-                PropertyList envProps;
-                fillPropertyList(node, envProps,
-                    [this](const std::string& s) { return this->parseVec3(s); },
-                    resolveValue);
-                const Color3f radiance = envProps.getColor("radiance",
-                                           envProps.getColor("emission", Color3f(0.f)));
-                out.hasConstantEnv = true;
-                out.constantEnv = radiance;
-            }
-        }
-
-        // ----------------------------------------------------------------
-        // <camera> (legacy) / <sensor type="perspective"> (Mitsuba-style)
-        // ----------------------------------------------------------------
-        else if (name == "camera" || name == "sensor") {
-            PropertyList cameraProps;
-            fillPropertyList(node, cameraProps,
-                [this](const std::string& s) { return this->parseVec3(s); },
-                resolveValue);
-
-            float fov = cameraProps.getFloat("fov", 45.f);
-            std::string originStr, targetStr, upStr;
-            Matrix4f sensorToWorld;
-            bool hasSensorMatrix = false;
-
-            for (const pugi::xml_node& child : node.children()) {
-                const std::string cn = child.name();
-                if (cn == "float") {
-                    if (std::string(child.attribute("name").value()) == "fov")
-                        fov = toF(resolveValue(child.attribute("value").value()));
-                } else if (cn == "transform") {
-                    const pugi::xml_node lookat = child.child("lookat");
-                    if (lookat) {
-                        originStr = resolveValue(lookat.attribute("origin").value());
-                        targetStr = resolveValue(lookat.attribute("target").value());
-                        upStr     = resolveValue(lookat.attribute("up").value());
+                    if (shapeType == "obj" || std::string(node.name()) == "mesh") {
+                        if (!parseMesh(baseDir, objFile, meshName, materialId,
+                                       emitterId, meshTransform, normalTransform, out, errorOut))
+                            return false;
+                    } else if (shapeType == "ply") {
+                        if (!parseMeshPLY(baseDir, objFile, meshName, materialId,
+                                          emitterId, meshTransform, normalTransform, out, errorOut))
+                            return false;
+                    } else if (shapeType == "rectangle") {
+                        appendRectangleShape(meshName, materialId, emitterId,
+                                             meshTransform, normalTransform, out);
+                    } else if (shapeType == "sphere") {
+                        float radius = meshProps.getFloat("radius", 1.f);
+                        Point3f center = meshProps.getPoint("center", Point3f(0.f));
+                        appendSphereShape(meshName, radius, center, materialId, emitterId,
+                                          meshTransform, normalTransform, out);
+                    } else if (shapeType == "cube") {
+                        appendCubeShape(meshName, materialId, emitterId,
+                                        meshTransform, normalTransform, out);
+                    } else if (shapeType == "disk") {
+                        appendDiskShape(meshName, materialId, emitterId,
+                                        meshTransform, normalTransform, out);
                     } else {
+                        out.warnings.push_back("Unsupported shape type '" + shapeType + "'; skipping shape '" + meshName + "'.");
+                    }
+
+
+
+                    ++nextMatId;
+
+                } catch (const std::exception& e) {
+                    errorOut = std::string("Mesh parse error: ") + e.what();
+                    return false;
+                }
+                break;
+            }
+            case EEmitter: {
+                const std::string emitterType = node.attribute("type").value();
+                if (emitterType == "envmap") {
+                    PropertyList envProps;
+                    parseProperties(node, envProps, defaults);
+
+                    Matrix4f envTransform;
+                    bool hasTransform = false;
+                    for (const pugi::xml_node& child : node.children()) {
+                        if (getTag(child.name()) != ETransform)
+                            continue;
                         const pugi::xml_node mnode = child.child("matrix");
-                        if (mnode && parseMatrix4fValue(resolveValue(mnode.attribute("value").value()), sensorToWorld)) {
-                            hasSensorMatrix = true;
+                        if (mnode && parseMatrix4fValue(resolveValue(mnode.attribute("value").value(), defaults), envTransform)) {
+                            hasTransform = true;
+                        }
+                    }
+
+                    const std::string filename = envProps.getString("filename", std::string());
+                    if (filename.empty()) {
+                        out.warnings.push_back("envmap emitter missing filename; background will remain black.");
+                        continue;
+                    }
+
+                    if (!loadEnvMapHDR(filename, baseDir, out.envMap.pixels, out.envMap.width, out.envMap.height, errorOut))
+                        return false;
+
+                    out.envMap.hasEnvMap = true;
+                    out.envMap.toWorld = hasTransform ? envTransform : Matrix4f();
+                } else if (emitterType == "constant") {
+                    PropertyList envProps;
+                    parseProperties(node, envProps, defaults);
+                    const Color3f radiance = envProps.getColor("radiance",
+                                               envProps.getColor("emission", Color3f(0.f)));
+                    out.envMap.hasConstant = true;
+                    out.envMap.constantRadiance = radiance;
+                }
+                break;
+            }
+            case ECamera: {
+                PropertyList cameraProps;
+                parseProperties(node, cameraProps, defaults);
+
+                float fov = cameraProps.getFloat("fov", 45.f);
+                std::string originStr, targetStr, upStr;
+                Matrix4f sensorToWorld;
+                bool hasSensorMatrix = false;
+
+                for (const pugi::xml_node& child : node.children()) {
+                    ETag cTag = getTag(child.name());
+                    if (cTag == EFloat) {
+                        if (std::string(child.attribute("name").value()) == "fov")
+                            fov = toF(resolveValue(child.attribute("value").value(), defaults));
+                    } else if (cTag == ETransform) {
+                        const pugi::xml_node lookat = child.child("lookat");
+                        if (lookat) {
+                            originStr = resolveValue(lookat.attribute("origin").value(), defaults);
+                            targetStr = resolveValue(lookat.attribute("target").value(), defaults);
+                            upStr     = resolveValue(lookat.attribute("up").value(), defaults);
+                        } else {
+                            const pugi::xml_node mnode = child.child("matrix");
+                            if (mnode && parseMatrix4fValue(resolveValue(mnode.attribute("value").value(), defaults), sensorToWorld)) {
+                                hasSensorMatrix = true;
+                            }
                         }
                     }
                 }
-            }
 
-            if (!originStr.empty()) {
-                if (!parseCamera(originStr, targetStr, upStr, fov, out, errorOut))
-                    return false;
-            } else if (hasSensorMatrix) {
-                // Mitsuba's sensor transform is a local-to-world transform.
-                // Derive the camera frame by transforming the local basis.
-                const Point3f camO   = sensorToWorld * Point3f(0.f, 0.f, 0.f);
-                const Point3f camFwdP = sensorToWorld * Point3f(0.f, 0.f, 1.f);
-                const Vector3f camUpV = sensorToWorld * Vector3f(0.f, 1.f, 0.f);
-                const Vector3f camDir = normalize(camFwdP - camO);
-                const Vector3f camUp   = normalize(camUpV);
+                if (!originStr.empty()) {
+                    if (!parseCamera(originStr, targetStr, upStr, fov, out, errorOut))
+                        return false;
+                } else if (hasSensorMatrix) {
+                    const Point3f camO   = sensorToWorld * Point3f(0.f, 0.f, 0.f);
+                    const Point3f camFwdP = sensorToWorld * Point3f(0.f, 0.f, 1.f);
+                    const Vector3f camUpV = sensorToWorld * Vector3f(0.f, 1.f, 0.f);
+                    const Vector3f camDir = normalize(camFwdP - camO);
+                    const Vector3f camUp   = normalize(camUpV);
 
-                out.camOrigin = camO;
-                out.camTarget = camO + camDir;
-                out.camUp     = camUp;
-                out.camFov    = fov;
-                out.hasCamera = true;
+                    out.camera.origin = camO;
+                    out.camera.target = camO + camDir;
+                    out.camera.up     = camUp;
+                    out.camera.fov    = fov;
+                    out.camera.hasCamera = true;
+                }
+                break;
             }
-        }
-        else if (name == "integrator") {
-            out.integratorType = resolveValue(node.attribute("type").value());
+            case EIntegrator:
+                out.integratorType = resolveValue(node.attribute("type").value(), defaults);
+                break;
+
+            default:
+                break;
         }
     }
 
@@ -1333,4 +899,4 @@ bool SceneLoader::load(const std::string& xmlPath,
     return true;
 }
 
-} // namespace futaba
+FUTABA_NAMESPACE_END

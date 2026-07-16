@@ -7,7 +7,7 @@
 #include "material.cuh"
 #include "bsdf_sample.cuh"
 
-namespace futaba {
+FUTABA_NAMESPACE_BEGIN
 
 struct Diffuse {
     Color3f albedo;
@@ -40,4 +40,4 @@ struct Diffuse {
     }
 };
 
-} // namespace futaba
+FUTABA_NAMESPACE_END

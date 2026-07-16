@@ -1,7 +1,7 @@
 #pragma once
 #include <cuda_runtime.h>
 
-namespace futaba {
+FUTABA_NAMESPACE_BEGIN
 
 /**
  * @brief RAII smart pointer wrapper for CUDA device memory.
@@ -59,4 +59,4 @@ public:
     explicit operator bool() const { return m_ptr != nullptr; }
 };
 
-} // namespace futaba
+FUTABA_NAMESPACE_END

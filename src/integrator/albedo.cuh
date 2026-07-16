@@ -6,7 +6,7 @@
 #include "bsdf.cuh"
 
 
-namespace futaba {
+FUTABA_NAMESPACE_BEGIN
 
 struct Albedo {
   // Visualizes surface albedo as RGB for debugging
@@ -19,12 +19,12 @@ struct Albedo {
   }
 };
 
-} // namespace futaba
+FUTABA_NAMESPACE_END
 
 #if !defined(__CUDACC__) && defined(NANOGUI_GLAD)
 #include "integrator_ui.h"
 
-namespace futaba {
+FUTABA_NAMESPACE_BEGIN
 
 class AlbedoIntegratorUI : public IntegratorUI {
 public:
@@ -32,5 +32,5 @@ public:
     int getMode() const override { return INTEGRATOR_ALBEDO; }
 };
 
-} // namespace futaba
+FUTABA_NAMESPACE_END
 #endif

@@ -3,7 +3,7 @@
 #include <cstring>
 #include <stb_image.h>
 
-namespace futaba {
+FUTABA_NAMESPACE_BEGIN
 
 cudaTextureObject_t TextureManager::createTexture(const std::string& filename) {
     int width = 0, height = 0, channels = 0;
@@ -75,4 +75,4 @@ void TextureManager::clear() {
     m_cudaTextureArrays.clear();
 }
 
-} // namespace futaba
+FUTABA_NAMESPACE_END

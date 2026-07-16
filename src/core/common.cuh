@@ -2,11 +2,25 @@
 
 #include "types.cuh"
 #include <cmath>
+#include <cstdio>
 #include <limits>
 
-namespace futaba {
+FUTABA_NAMESPACE_BEGIN
 
 constexpr float Infinity = std::numeric_limits<float>::infinity();
+
+// -----------------------------------------------------------------------------
+// Shared host-side CUDA error-checking helper. Every host .cpp/.cu file that
+// allocates or copies CUDA memory should use this instead of rolling its own.
+// -----------------------------------------------------------------------------
+#define CUDA_CHECK(call)                                                       \
+    do {                                                                       \
+        const cudaError_t _err = (call);                                      \
+        if (_err != cudaSuccess) {                                             \
+            fprintf(stderr, "CUDA error at %s:%d  %s\n",                       \
+                    __FILE__, __LINE__, cudaGetErrorString(_err));             \
+        }                                                                      \
+    } while (0)
 
 
 // -----------------------------------------------------------------------------
@@ -129,4 +143,4 @@ HD float fresnel(float cosThetaI, float extIOR, float intIOR) {
     return (rs * rs + rp * rp) * 0.5f;
 }
 
-} // End namespace futaba
+FUTABA_NAMESPACE_END

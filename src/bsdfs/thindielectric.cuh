@@ -6,7 +6,7 @@
 #include "bsdf_sample.cuh"
 #include "material.cuh"
 
-namespace futaba {
+FUTABA_NAMESPACE_BEGIN
 
 struct ThinDielectric {
     Color3f albedo;
@@ -47,4 +47,4 @@ struct ThinDielectric {
     }
 };
 
-} // namespace futaba
+FUTABA_NAMESPACE_END

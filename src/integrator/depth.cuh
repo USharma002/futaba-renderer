@@ -4,7 +4,7 @@
 #include "scene.cuh"
 #include "surface_interaction.cuh"
 
-namespace futaba {
+FUTABA_NAMESPACE_BEGIN
 
 // Depth integrator: returns the first surface hit distance per pixel.
 
@@ -24,12 +24,12 @@ struct Depth {
     }
 };
 
-} // namespace futaba
+FUTABA_NAMESPACE_END
 
 #if !defined(__CUDACC__) && defined(NANOGUI_GLAD)
 #include "integrator_ui.h"
 
-namespace futaba {
+FUTABA_NAMESPACE_BEGIN
 
 class DepthIntegratorUI : public IntegratorUI {
 public:
@@ -37,6 +37,6 @@ public:
     int getMode() const override { return INTEGRATOR_DEPTH; }
 };
 
-} // namespace futaba
+FUTABA_NAMESPACE_END
 #endif
 

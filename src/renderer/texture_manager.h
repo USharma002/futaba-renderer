@@ -3,8 +3,9 @@
 #include <vector>
 #include <string>
 #include <cuda_runtime.h>
+#include "types.cuh"
 
-namespace futaba {
+FUTABA_NAMESPACE_BEGIN
 
 class TextureManager {
 public:
@@ -26,4 +27,4 @@ private:
     std::vector<cudaTextureObject_t> m_cudaTextureObjects;
 };
 
-} // namespace futaba
+FUTABA_NAMESPACE_END

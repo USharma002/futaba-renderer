@@ -7,7 +7,7 @@
 #include "distribution.cuh"
 #include "emitter_sample.cuh"
 
-namespace futaba {
+FUTABA_NAMESPACE_BEGIN
 
 struct AreaEmitter {
     // Samples a point on the area lights in the scene
@@ -105,4 +105,4 @@ struct AreaEmitter {
     }
 };
 
-} // namespace futaba
+FUTABA_NAMESPACE_END

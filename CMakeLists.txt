@@ -20,11 +20,9 @@ add_subdirectory(ext/nanogui)
 add_executable(app 
     main.cpp 
 
-    # Core & Acceleration & Guiding & Denoiser
+    # Core & Acceleration & Denoiser
     src/accel/optix_bvh.cu
     src/denoiser/denoiser.cu
-    src/guiding/guiding.cpp
-    src/guiding/training_buffer.cu
     src/films/bitmap.cpp
 
     # Parser
@@ -40,33 +38,15 @@ add_executable(app
     # Renderer
     src/renderer/renderer_host.cpp
     src/renderer/texture_manager.cpp
-    src/renderer/scene_uploader.cpp
     src/renderer/optix_pipeline.cpp
 
     # GUI
     src/gui/gui.cpp
     src/gui/integrator_ui.cpp
+    src/gui/camera_controller.cpp
 )
 
-add_executable(struct_sizes
-    src/tests/test.cpp
-)
 
-add_executable(dtree_viewer
-    src/tests/dtree_viewer.cpp
-)
-
-add_executable(dist_viewer
-    src/tests/dist_viewer.cpp
-)
-
-add_executable(warptest
-    src/tests/warptest.cpp
-)
-
-add_executable(stree_viewer
-    src/tests/stree_viewer.cpp
-)
 
 find_path(OPTIX_INCLUDE_DIR optix.h
     HINTS
@@ -74,19 +54,11 @@ find_path(OPTIX_INCLUDE_DIR optix.h
 )
 if(OPTIX_INCLUDE_DIR)
     target_include_directories(app PRIVATE ${OPTIX_INCLUDE_DIR})
-    target_include_directories(struct_sizes PRIVATE ${OPTIX_INCLUDE_DIR})
-    target_include_directories(dtree_viewer PRIVATE ${OPTIX_INCLUDE_DIR})
-    target_include_directories(dist_viewer PRIVATE ${OPTIX_INCLUDE_DIR})
-    target_include_directories(warptest PRIVATE ${OPTIX_INCLUDE_DIR})
-    target_include_directories(stree_viewer PRIVATE ${OPTIX_INCLUDE_DIR})
+
 endif()
 
 # Force GLAD macro for Windows OpenGL
 target_compile_definitions(app PRIVATE NANOGUI_GLAD)
-target_compile_definitions(dtree_viewer PRIVATE NANOGUI_GLAD)
-target_compile_definitions(dist_viewer PRIVATE NANOGUI_GLAD)
-target_compile_definitions(warptest PRIVATE NANOGUI_GLAD)
-target_compile_definitions(stree_viewer PRIVATE NANOGUI_GLAD)
 
 set(APP_INCLUDES
     ${CMAKE_CURRENT_SOURCE_DIR}
@@ -106,9 +78,6 @@ set(APP_INCLUDES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/emitters
     ${CMAKE_CURRENT_SOURCE_DIR}/src/materials
     ${CMAKE_CURRENT_SOURCE_DIR}/src/denoiser
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/guiding
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/phase
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/medium
     ${CMAKE_CURRENT_SOURCE_DIR}/ext/nanogui/include
     ${CMAKE_CURRENT_SOURCE_DIR}/ext/pugixml/src
     ${CMAKE_CURRENT_SOURCE_DIR}/ext/tinyexr
@@ -117,14 +86,11 @@ set(APP_INCLUDES
     ${CMAKE_CURRENT_SOURCE_DIR}/ext/nanogui/ext/glfw/include
     ${CMAKE_CURRENT_SOURCE_DIR}/ext/nanogui/ext/eigen
     ${CMAKE_CURRENT_SOURCE_DIR}/ext/nanogui/ext/nanovg/example
+    ${CMAKE_CURRENT_SOURCE_DIR}/ext/tinyobjloader
+    ${CMAKE_CURRENT_SOURCE_DIR}/ext/happly
 )
 
 target_include_directories(app PRIVATE ${APP_INCLUDES})
-target_include_directories(struct_sizes PRIVATE ${APP_INCLUDES})
-target_include_directories(dtree_viewer PRIVATE ${APP_INCLUDES})
-target_include_directories(dist_viewer PRIVATE ${APP_INCLUDES})
-target_include_directories(warptest PRIVATE ${APP_INCLUDES})
-target_include_directories(stree_viewer PRIVATE ${APP_INCLUDES})
 
 # Build renderer_device.cu as PTX
 set(PTX_OUTPUT_DIR "${CMAKE_BINARY_DIR}/ptx")
@@ -149,13 +115,9 @@ add_custom_command(
             -o "${PTX_FILE}"
     DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/renderer/renderer_device.cu"
             "${CMAKE_CURRENT_SOURCE_DIR}/src/renderer/launch_params.h"
-            "${CMAKE_CURRENT_SOURCE_DIR}/src/guiding/guiding.h"
-            "${CMAKE_CURRENT_SOURCE_DIR}/src/guiding/ppg/adam.cuh"
-            "${CMAKE_CURRENT_SOURCE_DIR}/src/guiding/guiding_device.cuh"
             "${CMAKE_CURRENT_SOURCE_DIR}/src/emitters/emitter.cuh"
             "${CMAKE_CURRENT_SOURCE_DIR}/src/emitters/emitter_sample.cuh"
             "${CMAKE_CURRENT_SOURCE_DIR}/src/emitters/emitter_sampler.cuh"
-            "${CMAKE_CURRENT_SOURCE_DIR}/src/emitters/power_sampler.cuh"
             "${CMAKE_CURRENT_SOURCE_DIR}/src/emitters/area.cuh"
             "${CMAKE_CURRENT_SOURCE_DIR}/src/emitters/envmap.cuh"
             "${CMAKE_CURRENT_SOURCE_DIR}/src/scene/mesh.cuh"
@@ -163,11 +125,6 @@ add_custom_command(
             "${CMAKE_CURRENT_SOURCE_DIR}/src/integrator/path.cuh"
             "${CMAKE_CURRENT_SOURCE_DIR}/src/accel/bvh.cuh"
             "${CMAKE_CURRENT_SOURCE_DIR}/src/scene/scene.cuh"
-            "${CMAKE_CURRENT_SOURCE_DIR}/src/phase/phase_function.cuh"
-            "${CMAKE_CURRENT_SOURCE_DIR}/src/phase/henyey_greenstein.cuh"
-            "${CMAKE_CURRENT_SOURCE_DIR}/src/phase/isotropic.cuh"
-            "${CMAKE_CURRENT_SOURCE_DIR}/src/medium/medium.cuh"
-            "${CMAKE_CURRENT_SOURCE_DIR}/src/medium/homogeneous.cuh"
             "${CMAKE_CURRENT_SOURCE_DIR}/src/bsdfs/bsdf.cuh"
             "${CMAKE_CURRENT_SOURCE_DIR}/src/bsdfs/bsdf_sample.cuh"
             "${CMAKE_CURRENT_SOURCE_DIR}/src/bsdfs/dielectric.cuh"
@@ -193,27 +150,4 @@ target_link_libraries(app PRIVATE
     nanogui 
     CUDA::cudart
 )
-
-target_link_libraries(struct_sizes PRIVATE
-    CUDA::cudart
-)
-
-target_link_libraries(dtree_viewer PRIVATE
-    nanogui
-    CUDA::cudart
-)
-
-target_link_libraries(dist_viewer PRIVATE
-    nanogui
-    CUDA::cudart
-)
-
-target_link_libraries(warptest PRIVATE
-    nanogui
-    CUDA::cudart
-)
-
-target_link_libraries(stree_viewer PRIVATE
-    nanogui
-    CUDA::cudart
-)
+

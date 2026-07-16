@@ -4,7 +4,7 @@
 #include "scene.cuh"
 #include "surface_interaction.cuh"
 
-namespace futaba {
+FUTABA_NAMESPACE_BEGIN
 
 // Heatmap integrator: visualises BVH traversal cost per pixel.
 //
@@ -45,12 +45,12 @@ private:
     }
 };
 
-} // namespace futaba
+FUTABA_NAMESPACE_END
 
 #if !defined(__CUDACC__) && defined(NANOGUI_GLAD)
 #include "integrator_ui.h"
 
-namespace futaba {
+FUTABA_NAMESPACE_BEGIN
 
 class HeatmapIntegratorUI : public IntegratorUI {
 public:
@@ -58,6 +58,6 @@ public:
     int getMode() const override { return INTEGRATOR_HEATMAP; }
 };
 
-} // namespace futaba
+FUTABA_NAMESPACE_END
 #endif
 

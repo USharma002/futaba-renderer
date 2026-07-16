@@ -3,7 +3,7 @@
 #include "bsdf_sample.cuh"
 #include "microfacet.cuh"
 
-namespace futaba {
+FUTABA_NAMESPACE_BEGIN
 
 struct RoughPlastic {
     Color3f albedo;
@@ -38,4 +38,4 @@ struct RoughPlastic {
     }
 };
 
-} // namespace futaba
+FUTABA_NAMESPACE_END

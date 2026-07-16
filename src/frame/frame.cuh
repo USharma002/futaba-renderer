@@ -2,7 +2,7 @@
 
 #include "common.cuh"
 
-namespace futaba {
+FUTABA_NAMESPACE_BEGIN
 
 struct Frame {
   Vector3f s;
@@ -36,4 +36,4 @@ struct Frame {
   }
 };
 
-} // namespace futaba
+FUTABA_NAMESPACE_END

@@ -2,20 +2,20 @@
 
 #include "distribution.cuh"
 #include "scene.cuh"
+#include "emitter.cuh"
 #include "surface_interaction.cuh"
 #include "emitter_sample.cuh"
 #include "area.cuh"
-#include "power_sampler.cuh"
-#include "launch_params.h"
-#include "sampler.cuh"
-#include "guiding_device.cuh"
 
-namespace futaba {
+#include "sampler.cuh"
+#include "launch_params.h"
+
+FUTABA_NAMESPACE_BEGIN
 
 // ---------------------------------------------------------------------------
 // Emitter Sampler Interface Requirements:
 // 
-// Any light sampler (e.g., UniformEmitterSampler, PowerEmitterSampler)
+// Any light sampler (e.g., PowerEmitterSampler)
 // must implement the following compile-time static interface:
 //
 // 1. A sampling method:
@@ -36,10 +36,10 @@ namespace futaba {
 //      from the reference shading point.
 //    - If emitter_primitive_id is -1, evaluates the PDF for environment map.
 // ---------------------------------------------------------------------------
-struct UniformEmitterSampler {
+struct PowerEmitterSampler {
     CDFLightSamplerData data;
 
-    HD explicit UniformEmitterSampler(const CDFLightSamplerData& d) : data(d) {}
+    HD explicit PowerEmitterSampler(const CDFLightSamplerData& d) : data(d) {}
 
     HD bool sample(const Scene&              scene,
                    const SurfaceIntersection& ref,
@@ -47,12 +47,10 @@ struct UniformEmitterSampler {
                    EmitterSample&             es) const
     {
         const bool have_area = (data.emissiveTriCount > 0);
-        const bool have_nonarea = (data.nonAreaEmitterCount > 0 && data.nonAreaEmitterIndices != nullptr);
         const bool have_env  = scene.envMap.isActive();
 
         int num_categories = 0;
         if (have_area) num_categories++;
-        if (have_nonarea) num_categories++;
         if (have_env) num_categories++;
 
         if (num_categories == 0) return false;
@@ -70,15 +68,6 @@ struct UniformEmitterSampler {
             if (current_cat == cat_idx) {
                 AreaEmitter area_emitter;
                 if (!area_emitter.sample(scene, ref, new_u, data, es)) return false;
-                es.pdf *= select_prob;
-                return true;
-            }
-            current_cat++;
-        }
-
-        if (have_nonarea) {
-            if (current_cat == cat_idx) {
-                if (!sample_non_area(scene, ref, new_u, es)) return false;
                 es.pdf *= select_prob;
                 return true;
             }
@@ -103,12 +92,10 @@ struct UniformEmitterSampler {
                  float           dist) const
     {
         const bool have_area = (data.emissiveTriCount > 0);
-        const bool have_nonarea = (data.nonAreaEmitterCount > 0 && data.nonAreaEmitterIndices != nullptr);
         const bool have_env  = scene.envMap.isActive();
 
         int num_categories = 0;
         if (have_area) num_categories++;
-        if (have_nonarea) num_categories++;
         if (have_env) num_categories++;
 
         if (num_categories == 0) return 0.f;
@@ -131,37 +118,6 @@ struct UniformEmitterSampler {
 
 private:
 
-    HD bool sample_non_area(const Scene& scene,
-                            const SurfaceIntersection& ref,
-                            const Point3f& u,
-                            EmitterSample& es) const
-    {
-        int sel = (int)(u.x * (float)data.nonAreaEmitterCount);
-        if (sel > data.nonAreaEmitterCount - 1) sel = data.nonAreaEmitterCount - 1;
-        const int eid = data.nonAreaEmitterIndices[sel];
-        if (eid < 0 || (uint32_t)eid >= scene.emitterCount) return false;
-
-        const EmitterGPU& em = scene.emitters[eid];
-
-        if (em.type == kEmitterTypePoint) {
-            const Vector3f v  = em.position - ref.p;
-            const float    d  = v.length();
-            if (d < 1e-8f) return false;
-            const float    d2 = d * d;
-            es.p = em.position; es.d = v / d; es.dist = d;
-            es.pdf = 1.f; es.Le = em.radiance / d2; es.delta = true;
-            return true;
-        }
-
-        if (em.type == kEmitterTypeDirectional) {
-            es.d = -em.direction; es.dist = 1e30f;
-            es.pdf = 1.f; es.Le = em.radiance; es.delta = true;
-            return true;
-        }
-
-        return false;
-    }
-
     HD bool sample_env(const Scene& scene, const Point3f& u,
                        EmitterSample& es) const
     {
@@ -175,20 +131,17 @@ private:
 };
 
 struct EmitterSampler {
-    int type;
-    CDFLightSamplerData cdf_data;
+    LightSamplerData config;
 
-    HD explicit EmitterSampler(int t = LIGHT_SAMPLER_UNIFORM, CDFLightSamplerData d = {}) : type(t), cdf_data(d) {}
+    HD explicit EmitterSampler(const LightSamplerData& c = {}) : config(c) {}
 
     HD bool sample(const Scene&              scene,
                    const SurfaceIntersection& ref,
                    const Point3f&             u,
                    EmitterSample&             es) const
     {
-        if (type == LIGHT_SAMPLER_UNIFORM) {
-            return UniformEmitterSampler{cdf_data}.sample(scene, ref, u, es);
-        } else if (type == LIGHT_SAMPLER_POWER) {
-            return PowerEmitterSampler{}.sample(scene, ref, u, es);
+        if (config.type == LIGHT_SAMPLER_POWER) {
+            return PowerEmitterSampler{config.cdf}.sample(scene, ref, u, es);
         }
         return false;
     }
@@ -198,10 +151,8 @@ struct EmitterSampler {
                  const Vector3f& wi,
                  float           dist) const
     {
-        if (type == LIGHT_SAMPLER_UNIFORM) {
-            return UniformEmitterSampler{cdf_data}.pdf(scene, emitter_primitive_id, wi, dist);
-        } else if (type == LIGHT_SAMPLER_POWER) {
-            return PowerEmitterSampler{}.pdf(scene, emitter_primitive_id, wi, dist);
+        if (config.type == LIGHT_SAMPLER_POWER) {
+            return PowerEmitterSampler{config.cdf}.pdf(scene, emitter_primitive_id, wi, dist);
         }
         return 0.f;
     }
@@ -241,54 +192,33 @@ struct EmitterSampler {
         }
         return Le;
     }
-
-    // Sample direct lighting from emitters using Next Event Estimation (NEE).
-    HD Color3f sample_direct_emitter(const Scene& scene,
-                                     const SurfaceIntersection& si,
-                                     const Material& mat,
-                                     Sampler& sampler,
-                                     int guiding_mode,
-                                     STreeNode* sTreeNodes,
-                                     const AABB& sTreeAABB,
-                                     float bsdf_sampling_fraction) const
-    {
-        if (!scene.use_nee || BSDF::is_delta(mat.type) || mat.type == BSDF_ID_NULL)
-            return Color3f(0.f);
-
-        // 1. Sample direction towards emitter
-        EmitterSample es;
-        Point3f u3(sampler.next1D(), sampler.next1D(), sampler.next1D());
-        if (!sample(scene, si, u3, es) || es.pdf <= 0.f)
-            return Color3f(0.f);
-
-        if (es.Le.x <= 0.f && es.Le.y <= 0.f && es.Le.z <= 0.f)
-            return Color3f(0.f);
-
-        Vector3f wo_local = si.to_local(es.d);
-        float cos_theta = wo_local.z;
-        if (cos_theta <= 0.f)
-            return Color3f(0.f);
-
-        // 2. Evaluate BSDF and pdf for the sampled direction
-        Color3f f_bsdf;
-        float bsdf_pdf = 0.f;
-        BSDF::eval_pdf(mat, si, wo_local, f_bsdf, bsdf_pdf);
-        if (f_bsdf.x <= 0.f && f_bsdf.y <= 0.f && f_bsdf.z <= 0.f)
-            return Color3f(0.f);
-
-        // 3. Account for path guiding in MIS
-        GuidingDistribution guiding(guiding_mode, si, sTreeNodes, sTreeAABB);
-        float mixed_pdf = guiding.mixed_pdf(wo_local, bsdf_pdf, bsdf_sampling_fraction);
-
-        // 4. Trace shadow ray to check visibility
-        Ray shadow = si.spawn_ray(es.d);
-        if (scene.occluded(shadow, 1e-6f, es.dist - 1e-4f, es.mesh_id))
-            return Color3f(0.f);
-
-        // 5. Compute MIS weight and direct lighting contribution
-        float mis = es.delta ? 1.f : mis_weight(es.pdf, mixed_pdf);
-        return f_bsdf * (cos_theta / es.pdf) * es.Le * mis;
-    }
 };
 
-} // namespace futaba
+// Combines an emitter sample with an already-evaluated *local scattering*
+// response (BSDF value+pdf at a surface, or phase-function value+pdf inside
+// a medium) into one shadow-tested, MIS-weighted direct-lighting contribution.
+//
+// This is deliberately the only place shadow-ray + MIS-combine logic for NEE
+// lives. It takes f_local/pdf_local/cos_or_one as plain numbers rather than a
+// Material, so it works identically for surfaces (Path) and media
+// (VolumetricPath) -- neither the emitter sampler nor this function needs to
+// know what kind of scattering produced them. cos_or_one is the local |cos
+// theta| term for a surface, or 1 for an isotropic-ish medium scattering
+// event where no cosine factor applies.
+HD inline Color3f nee_contribution(const Scene& scene,
+                                   const Ray& shadow_ray, float shadow_t_max, int occluder_mesh_id,
+                                   const EmitterSample& es,
+                                   const Color3f& f_local, float pdf_local, float cos_or_one)
+{
+    if ((f_local.x <= 0.f && f_local.y <= 0.f && f_local.z <= 0.f) ||
+        (es.Le.x <= 0.f && es.Le.y <= 0.f && es.Le.z <= 0.f))
+        return Color3f(0.f);
+
+    if (scene.occluded(shadow_ray, 1e-6f, shadow_t_max, occluder_mesh_id))
+        return Color3f(0.f);
+
+    float mis = es.delta ? 1.f : mis_weight(es.pdf, pdf_local);
+    return f_local * (cos_or_one / es.pdf) * es.Le * mis;
+}
+
+FUTABA_NAMESPACE_END

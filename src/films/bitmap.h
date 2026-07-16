@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 
-namespace futaba {
+FUTABA_NAMESPACE_BEGIN
 
 class Bitmap {
 public:
@@ -24,4 +24,4 @@ public:
   bool saveEXR(const std::string &filename) const;
 };
 
-} // namespace futaba
+FUTABA_NAMESPACE_END

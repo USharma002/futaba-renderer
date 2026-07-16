@@ -6,7 +6,7 @@
 #include "proplist.h"
 #include "scene_loader.h"
 
-namespace futaba {
+FUTABA_NAMESPACE_BEGIN
 
 EmitterInstance make_area_emitter(const PropertyList& props);
 EmitterInstance make_point_emitter(const PropertyList& props);
@@ -21,4 +21,4 @@ EmitterInstance makeEmitterFromPropertyLists(
         const PropertyList&       props,
         std::vector<std::string>& warnings);
 
-} // namespace futaba
+FUTABA_NAMESPACE_END

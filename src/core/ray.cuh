@@ -5,7 +5,7 @@
 #include <cmath>
 
 
-namespace futaba {
+FUTABA_NAMESPACE_BEGIN
 
 struct Ray3f {
   Point3f o;     // Ray origin
@@ -57,4 +57,4 @@ struct Ray3f {
 
 typedef Ray3f Ray;
 
-} // End namespace futaba
+FUTABA_NAMESPACE_END

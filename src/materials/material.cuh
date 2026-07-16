@@ -2,7 +2,7 @@
 
 #include "types.cuh"
 
-namespace futaba {
+FUTABA_NAMESPACE_BEGIN
 
 enum BSDFType {
     BSDF_ID_DIFFUSE          = 0,
@@ -48,4 +48,4 @@ struct Material {
     }
 };
 
-} // namespace futaba
+FUTABA_NAMESPACE_END

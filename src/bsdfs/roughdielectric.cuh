@@ -1,12 +1,13 @@
 #pragma once
 
+#include <cstring>
 #include "bsdf_sample.cuh"
 #include "warp.cuh"
 #include "frame.cuh"
 #include "common.cuh"
 #include "sampler.cuh"
 
-namespace futaba {
+FUTABA_NAMESPACE_BEGIN
 
 struct RoughDielectric {
     Color3f albedo;
@@ -121,12 +122,14 @@ struct RoughDielectric {
         const float sinT2 = eta * eta * fmaxf(0.f, 1.f - whDotWi * whDotWi);
         const bool  tir   = (sinT2 >= 1.f);
 
-        // Generate a pseudo-random value using a hash of the coordinates s2.x and s2.y,
-        // which serves as the 1D sample for the reflection/refraction decision.
-        union { float f; uint32_t u; } ux, uy;
-        ux.f = s2.x;
-        uy.f = s2.y;
-        uint64_t seed = (static_cast<uint64_t>(ux.u) << 32) | uy.u;
+        // Derive an extra decorrelated 1D sample from s2 for the reflect/
+        // refract decision (BSDF::sample only threads a 2D sample through,
+        // and both components are already spent on the microfacet normal).
+        // memcpy (not a union) avoids type-punning UB for the float->bits read.
+        uint32_t bits_x, bits_y;
+        std::memcpy(&bits_x, &s2.x, sizeof(float));
+        std::memcpy(&bits_y, &s2.y, sizeof(float));
+        const uint64_t seed = (static_cast<uint64_t>(bits_x) << 32) | bits_y;
         pcg32 rng(seed);
         const float sample1 = rng.nextFloat();
 
@@ -166,4 +169,4 @@ struct RoughDielectric {
     }
 };
 
-} // namespace futaba
+FUTABA_NAMESPACE_END

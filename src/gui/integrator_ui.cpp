@@ -6,9 +6,8 @@
 #include "phong.cuh"
 #include "primitives.cuh"
 #include "heatmap.cuh"
-#include "volpath.cuh"
 
-namespace futaba {
+FUTABA_NAMESPACE_BEGIN
 
 std::vector<std::shared_ptr<IntegratorUI>>& IntegratorRegistry::getIntegrators() {
     static std::vector<std::shared_ptr<IntegratorUI>> integrators;
@@ -20,7 +19,6 @@ std::vector<std::shared_ptr<IntegratorUI>>& IntegratorRegistry::getIntegrators()
         integrators.push_back(std::make_shared<PhongIntegratorUI>());
         integrators.push_back(std::make_shared<PrimitivesIntegratorUI>());
         integrators.push_back(std::make_shared<HeatmapIntegratorUI>());
-        integrators.push_back(std::make_shared<VolPathIntegratorUI>());
     }
     return integrators;
 }
@@ -34,4 +32,4 @@ std::shared_ptr<IntegratorUI> IntegratorRegistry::getIntegrator(int mode) {
     return nullptr;
 }
 
-} // namespace futaba
+FUTABA_NAMESPACE_END

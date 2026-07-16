@@ -1,15 +1,13 @@
 #pragma once
 #include "types.cuh"
 
-namespace futaba {
+FUTABA_NAMESPACE_BEGIN
     // Data structure holding CDF tables/arrays for basic emitter sampling
     struct CDFLightSamplerData {
         float* emitterTriangleCdf = nullptr;
         int*   emissiveTriangleIndices = nullptr;
         int*   emissiveGlobalToIndex = nullptr;
-        int*   nonAreaEmitterIndices = nullptr;
         int    emissiveTriCount = 0;
-        int    nonAreaEmitterCount = 0;
         float  emitterTriangleFuncSum = 0.f;
     };
 
@@ -24,4 +22,4 @@ namespace futaba {
         int      primitive_id = -1; // Global triangle index (area); -1 otherwise
         int      mesh_id      = -1; // Mesh owning the sampled triangle
     };
-} // namespace futaba
+FUTABA_NAMESPACE_END

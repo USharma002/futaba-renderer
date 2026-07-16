@@ -2,11 +2,15 @@
 #include <fstream>
 #include <filesystem>
 #include <stb_image.h>
+
 #include <tinyexr.h>
+#include <stb_image_write.h>
+
+
 
 namespace fs = std::filesystem;
 
-namespace futaba {
+FUTABA_NAMESPACE_BEGIN
 
 bool loadEnvMapEXR(const std::string& filename,
                    const std::string& baseDir,
@@ -84,4 +88,4 @@ bool loadEnvMapHDR(const std::string& filename,
     return true;
 }
 
-} // namespace futaba
+FUTABA_NAMESPACE_END

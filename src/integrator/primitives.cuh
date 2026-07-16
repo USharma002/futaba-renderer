@@ -5,7 +5,7 @@
 #include "surface_interaction.cuh"
 
 
-namespace futaba {
+FUTABA_NAMESPACE_BEGIN
 
 HD Color3f faceColorFromId(int primitiveId) {
   unsigned int x = (unsigned int)(primitiveId >= 0 ? primitiveId : 0);
@@ -40,12 +40,12 @@ struct Primitives {
     return faceColorFromId(faceId);
   }
 };
-} // namespace futaba
+FUTABA_NAMESPACE_END
 
 #if !defined(__CUDACC__) && defined(NANOGUI_GLAD)
 #include "integrator_ui.h"
 
-namespace futaba {
+FUTABA_NAMESPACE_BEGIN
 
 class PrimitivesIntegratorUI : public IntegratorUI {
 public:
@@ -53,6 +53,6 @@ public:
     int getMode() const override { return INTEGRATOR_PRIMITIVES; }
 };
 
-} // namespace futaba
+FUTABA_NAMESPACE_END
 #endif
 

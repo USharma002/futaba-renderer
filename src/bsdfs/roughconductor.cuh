@@ -3,7 +3,7 @@
 #include "bsdf_sample.cuh"
 #include "microfacet.cuh"
 
-namespace futaba {
+FUTABA_NAMESPACE_BEGIN
 
 struct RoughConductor {
     Color3f albedo;
@@ -43,4 +43,4 @@ struct RoughConductor {
     }
 };
 
-} // namespace futaba
+FUTABA_NAMESPACE_END

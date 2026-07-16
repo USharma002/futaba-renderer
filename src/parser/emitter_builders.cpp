@@ -1,6 +1,6 @@
 #include "emitter_builders.h"
 
-namespace futaba {
+FUTABA_NAMESPACE_BEGIN
 
 EmitterInstance make_area_emitter(const PropertyList& props) {
     EmitterInstance inst(EmitterType::Area);
@@ -58,4 +58,4 @@ EmitterInstance makeEmitterFromPropertyLists(
     return EmitterInstance(EmitterType::None);
 }
 
-} // namespace futaba
+FUTABA_NAMESPACE_END

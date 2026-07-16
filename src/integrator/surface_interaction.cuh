@@ -4,7 +4,7 @@
 #include "ray.cuh"
 #include "types.cuh"
 
-namespace futaba {
+FUTABA_NAMESPACE_BEGIN
 
 struct SurfaceIntersection {
     // World-space geometry
@@ -49,4 +49,4 @@ struct SurfaceIntersection {
     }
 };
 
-} // namespace futaba
+FUTABA_NAMESPACE_END

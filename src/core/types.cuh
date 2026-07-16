@@ -8,6 +8,11 @@
 #pragma warning(disable: 4141)
 #endif
 
+#define FUTABA_NAMESPACE_BEGIN namespace futaba {
+#define FUTABA_NAMESPACE_END }
+#define FUNTABA_NAMESPACE_BEGIN namespace futaba {
+#define FUNTABA_NAMESPACE_END }
+
 
 // -----------------------------------------------------------------------------
 // MACROS & UTILS
@@ -27,6 +32,7 @@
     #define FAST_MIN(a, b) std::min(a, b)
 #endif
 
+FUTABA_NAMESPACE_BEGIN
 // -----------------------------------------------------------------------------
 // TEMPLATED VECTOR & POINT CLASSES
 // -----------------------------------------------------------------------------
@@ -299,3 +305,5 @@ struct Matrix4f {
         return m;
     }
 };
+
+FUTABA_NAMESPACE_END
