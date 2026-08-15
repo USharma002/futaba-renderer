@@ -11,6 +11,8 @@ Futaba is a high-performance, learning-oriented physically-based renderer writte
 | ![Dragon CBox](assets/dragon-cbox.png) | ![Chess DOF](assets/chess-dof.png) |
 | **Volumetric Cornell Box** | **Veach MIS** |
 | ![Volumetric Cornell Box](assets/cbox-volume.png) | ![Veach MIS](assets/veach-mis.png) |
+| **Ford Mustang GT3** | **Teapot Filled** |
+| ![Ford Mustang GT3](assets/mustang.png) | ![Teapot Filled](assets/teapot-full.png) |
 
 
 ## Available Visualizations
@@ -96,62 +98,49 @@ Futaba is a high-performance, learning-oriented physically-based renderer writte
 6. **Film** --- samples accumulate into a 32-bit float PBO for zero-copy OpenGL display; denoiser reads albedo/normal guide buffers and writes tonemapped output
 
 ```mermaid
-%%{init: {'flowchart': {'curve': 'linear'}}}%%
 flowchart TD
 
-classDef cpu fill:#e3f2fd,stroke:#1565c0,stroke-width:2px,color:#000;
-classDef gpu fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px,color:#000;
-classDef data fill:#fff3e0,stroke:#e65100,stroke-width:2px,color:#000;
+    subgraph Host ["Host (CPU)"]
+        direction TB
+        main["main.cpp"] --> FS["FutabaScreen (NanoGUI Viewport)"]
+        FS -->|"Load XML"| SL["SceneLoader"]
+        SL -->|"Build Scene"| LS["LoadedScene"]
+        LS -->|"Initialize"| RH["RendererHost"]
+        FS -->|"Interactive Controls"| RH
+    end
 
-main[main.cpp]:::cpu
-FS[FutabaScreen]:::cpu
-SL[SceneLoader]:::cpu
-LS[LoadedScene CPU]:::data
-RH[RendererHost]:::cpu
+    subgraph Device ["Device Pipeline (CUDA / OptiX)"]
+        direction TB
+        RH -->|"Configure"| OPTIX["OptiX Acceleration Structure"]
+        RH -->|"Upload"| SCENE["Scene Resources (Meshes / Materials / Media)"]
+        RH -->|"Launch"| KERNEL["CUDA Render Kernel"]
 
-OPTIX[OptixPipeline]:::cpu
-KERNEL[CUDA Render Kernel]:::gpu
-SGPU[Scene GPU]:::gpu
+        KERNEL --> CAM["Camera & Sampler"]
+        KERNEL --> INTG["Integrator (Path / VolPath)"]
 
-SAMP[Sampler]:::gpu
-CAM[PerspectiveCamera]:::gpu
-INTG[Integrator]:::gpu
-FILM[HDRFilm]:::data
-DENOISE[DenoiserManager]:::gpu
-RECORDER[PathRecorder\n(Denoiser Guide Buffers)]:::data
+        INTG <-->|"Hardware RT Cores"| OPTIX
+        INTG -->|"Evaluate BSDF & Phase"| MATS["BSDFs / Media / Emitters"]
+        SCENE -.-> MATS
+    end
 
-BVH[BVH / Nodes]:::data
-TRIS[Geometry]:::data
-MATS[Materials]:::data
-EMITS[Emitters]:::data
+    subgraph Output ["Film & Post-Processing"]
+        direction TB
+        INTG -->|"Write Albedo & Normals"| REC["PathRecorder (Guide Buffers)"]
+        KERNEL -->|"Accumulate Radiance"| FILM["32-bit HDR Film (PBO)"]
+        
+        REC -->|"Guide Buffers"| DENOISE["OptiX AI Denoiser"]
+        FS -->|"Trigger Denoise"| DENOISE
+        DENOISE -->|"Denoised Frame"| FILM
+        FILM -.->|"Zero-Copy OpenGL Display"| FS
+    end
 
-main --> FS
-FS -->|Loads XML| SL
-SL -->|Builds| LS
-LS -->|Passes to| RH
-FS -->|Drives| RH
+    classDef cpu fill:#e3f2fd,stroke:#1565c0,stroke-width:1.5px,color:#0d47a1;
+    classDef gpu fill:#e8f5e9,stroke:#2e7d32,stroke-width:1.5px,color:#1b5e20;
+    classDef data fill:#fff3e0,stroke:#e65100,stroke-width:1.5px,color:#bf360c;
 
-RH -->|Configures| OPTIX
-RH -->|Allocates| SGPU
-RH -->|Dispatches| KERNEL
-
-SGPU --> BVH
-SGPU --> TRIS
-SGPU --> MATS
-SGPU --> EMITS
-
-KERNEL --> SAMP
-KERNEL --> CAM
-KERNEL --> INTG
-
-INTG -->|Query & Shade| SGPU
-INTG -->|Writes 1st-bounce albedo/normal| RECORDER
-RECORDER -->|Feeds| DENOISE
-
-KERNEL -->|Accumulate| FILM
-FS -->|Executes Denoising| DENOISE
-DENOISE -->|Denoises Beauty/Albedo/Normal| FILM
-FILM -.->|Display Texture| FS
+    class main,FS,SL,RH cpu;
+    class OPTIX,KERNEL,CAM,INTG,MATS,DENOISE gpu;
+    class LS,SCENE,REC,FILM data;
 ```
 
 ## Building and Running
