@@ -1,166 +1,203 @@
 #pragma once
 
-#include "path.cuh"
+#include "bsdf_sample.cuh"
+#include "bsdf.cuh"
+#include "emitter_sampler.cuh"
+#include "medium/medium.cuh"
+#include "phase/phase.cuh"
 #include "sampler.cuh"
 #include "scene.cuh"
 #include "surface_interaction.cuh"
-#include "emitter_sampler.cuh"
-#include "bsdf.cuh"
 #include <cmath>
 
-namespace futaba {
+FUTABA_NAMESPACE_BEGIN
 
-struct VolumetricPath {
-    int  max_depth;
-    int  rr_depth;
-    bool hide_emitters;
+struct VolPath {
+    int            max_depth;
+    int            rr_depth;
     EmitterSampler emitter_sampler;
 
-    HD VolumetricPath(int max_d = 8, int rr_d = 5, bool hide_e = false, EmitterSampler sampler = EmitterSampler())
-        : max_depth(max_d), rr_depth(rr_d), hide_emitters(hide_e), emitter_sampler(sampler) {}
+    HD explicit VolPath(int max_d = 32, int rr_d = 5, EmitterSampler sampler = EmitterSampler())
+        : max_depth(max_d), rr_depth(rr_d), emitter_sampler(sampler) {}
 
+    // Evaluate beam transmittance and visibility along shadow ray through media and null boundaries
+    HD static Color3f eval_shadow_transmittance(const Scene& scene, const Point3f& origin, const Vector3f& d,
+                                                float max_dist, int start_medium_id, int target_mesh_id)
+    {
+        Color3f tr(1.0f);
+        int med_id = start_medium_id;
+        float t_min = 1e-4f;
+        float t_max = max_dist;
+        Point3f ray_o = origin;
 
+        for (int step = 0; step < 16; ++step) {
+            Ray test_ray(ray_o, d, t_min, t_max);
+            SurfaceInteraction si;
+            bool hit = scene.intersect(test_ray, t_min, t_max, si);
 
-    HD Color3f sample(const Ray& ray, const Scene& scene, Sampler& sampler) const {
-        Color3f L(0.f), beta(1.f);
-        float   eta = 1.f;
-        Ray     current_ray = ray;
+            const Medium* med = (med_id >= 0 && (uint32_t)med_id < scene.mediumCount) ? &scene.media[med_id] : nullptr;
+            float seg_dist = hit ? si.t : t_max;
 
-        float   prev_bsdf_pdf   = 1.f;
-        bool    prev_bsdf_delta = true;
-        Point3f prev_p          = ray.o;
-
-        bool inside_medium = false;
-
-        for (int depth = 0; depth < max_depth; ++depth) {
-            SurfaceIntersection si;
-            bool hit = scene.intersect(current_ray, current_ray.mint, current_ray.maxt, si);
-
-            if (scene.hasMedium && inside_medium) {
-                float sigma_t_c = 0.f;
-                scene.medium.sampleChannel(sampler.next1D(), sigma_t_c);
-
-                float t = -logf(1.f - fminf(sampler.next1D(), 0.999999f)) / fmaxf(sigma_t_c, 1e-6f);
-
-                if (!hit || t < si.t) {
-                    Point3f p_t = current_ray.o + t * current_ray.d;
-
-                    Color3f transmittance = scene.medium.evalTransmittance(t);
-
-                    float pdf = sigma_t_c * expf(-sigma_t_c * t);
-                    if (pdf <= 0.f) return L;
-
-                    Color3f W = (transmittance * scene.medium.homogeneous.sigmaS) / pdf;
-                    beta *= W;
-
-                    if (scene.use_nee) {
-                        EmitterSample es;
-                        Point3f u3(sampler.next1D(), sampler.next1D(), sampler.next1D());
-                        SurfaceIntersection vol_si;
-                        vol_si.p = p_t;
-                        vol_si.wi = -current_ray.d;
-                        vol_si.front_face = true;
-                        
-                        if (emitter_sampler.sample(scene, vol_si, u3, es) && es.pdf > 0.f) {
-                            if (es.Le.x > 0.f || es.Le.y > 0.f || es.Le.z > 0.f) {
-                                Ray shadow(p_t, es.d);
-                                float t_max = es.dist - 1e-4f;
-                                bool visible = !scene.occluded(shadow, 1e-6f, t_max, es.mesh_id);
-                                if (visible) {
-                                    Color3f trans_light = scene.medium.evalTransmittance(es.dist);
-
-                                    float phase_val = scene.medium.getPhaseFunction().eval(dot(current_ray.d, es.d));
-                                    float weight_nee = es.delta ? 1.f : mis_weight(es.pdf, phase_val);
-                                    L += beta * (phase_val / es.pdf) * es.Le * trans_light * weight_nee;
-                                }
-                            }
-                        }
-                    }
-
-                    Vector3f wo;
-                    float phase_pdf = 0.f;
-                    scene.medium.getPhaseFunction().sample(current_ray.d, sampler.next2D(), wo, phase_pdf);
-
-                    current_ray = Ray(p_t, wo);
-                    prev_p = p_t;
-                    prev_bsdf_pdf = phase_pdf;
-                    prev_bsdf_delta = false;
-
-                    continue;
-                } else {
-                    Color3f transmittance = scene.medium.evalTransmittance(si.t);
-                    float prob_surf = expf(-sigma_t_c * si.t);
-                    if (prob_surf > 0.f) {
-                        beta *= transmittance / prob_surf;
-                    }
-                }
+            if (med && med->is_active()) {
+                tr *= med->eval_transmittance(seg_dist);
+                if (tr.maxComponent() < 1e-6f) return Color3f(0.f);
             }
 
-            if (hit && scene.materials[si.material_id].type == BSDF_ID_NULL) {
-                inside_medium = !inside_medium;
-                current_ray = si.spawn_ray(current_ray.d);
-                prev_bsdf_delta = true;
-                depth--;
-                continue;
-            }
+            if (!hit) break;
 
-            // ---------------------- Direct emission ----------------------
-            Color3f Le = emitter_sampler.eval_direct_emission(scene, si, hit, current_ray, prev_p, prev_bsdf_pdf, prev_bsdf_delta);
-            L += beta * Le;
-
-            if (!hit) {
-                break;
-            }
+            if (si.shape_id == target_mesh_id) break;
 
             const Material& mat = scene.materials[si.material_id];
+            if (mat.type == BSDF_ID_NULL) {
+                bool entering = (dot(si.n, d) < 0.f);
+                med_id = entering ? mat.interiorMediumId : mat.exteriorMediumId;
+                ray_o = si.p;
+                t_max -= seg_dist;
+                if (t_max <= 1e-4f) break;
+            } else {
+                return Color3f(0.f);
+            }
+        }
 
-            if (scene.use_nee && !BSDF::is_delta(mat.type)) {
-                EmitterSample es;
-                Point3f u3(sampler.next1D(), sampler.next1D(), sampler.next1D());
-                if (emitter_sampler.sample(scene, si, u3, es) && es.pdf > 0.f) {
-                    if (es.Le.x > 0.f || es.Le.y > 0.f || es.Le.z > 0.f) {
-                        const Vector3f wo_local = si.to_local(es.d);
-                        const float cos_s = wo_local.z;
-                        if (cos_s > 0.f) {
-                            Color3f f_bsdf; float pdf_bsdf;
-                            BSDF::eval_pdf(mat, si, wo_local, f_bsdf, pdf_bsdf);
-                            if (f_bsdf.x > 0.f || f_bsdf.y > 0.f || f_bsdf.z > 0.f) {
-                                Ray shadow = si.spawn_ray(es.d);
-                                float t_max = es.dist - 1e-4f;
-                                bool visible = !scene.occluded(shadow, 1e-6f, t_max, es.mesh_id);
-                                if (visible) {
-                                    Color3f trans_light(1.f);
-                                    if (scene.hasMedium && inside_medium) {
-                                        trans_light = scene.medium.evalTransmittance(es.dist);
-                                    }
-                                    const float w = es.delta ? 1.f : mis_weight(es.pdf, pdf_bsdf);
-                                    L += beta * f_bsdf * (cos_s / es.pdf) * es.Le * trans_light * w;
-                                }
+        return tr;
+    }
+
+    HD Color3f sample(const Ray& ray, const Scene& scene, Sampler& sampler) const {
+        Ray     current_ray = ray;
+        Color3f L(0.f), beta(1.f);
+        float   eta = 1.f;
+        int     current_medium_id = -1; // Starts in vacuum
+
+        Point3f prev_p          = ray.o;
+        float   prev_pdf        = 1.f;
+        bool    prev_delta      = true;
+
+        for (int depth = 0; depth < max_depth; ++depth) {
+            SurfaceInteraction si;
+            bool hit = scene.intersect(current_ray, current_ray.mint, current_ray.maxt, si);
+            float max_t = hit ? si.t : Infinity;
+
+            const Medium* current_medium = (current_medium_id >= 0 && (uint32_t)current_medium_id < scene.mediumCount)
+                ? &scene.media[current_medium_id] : nullptr;
+
+            MediumInteraction mi;
+            Color3f tr_weight(1.f);
+            float med_pdf = 1.f;
+            bool is_medium_scatter = false;
+
+            if (current_medium && current_medium->is_active()) {
+                int channel = (int)(sampler.next1D() * 3.f);
+                if (channel > 2) channel = 2;
+                is_medium_scatter = current_medium->sample_distance(current_ray, max_t, sampler.next1D(), channel, mi, tr_weight, med_pdf);
+            }
+
+            beta *= tr_weight;
+
+            if (is_medium_scatter) {
+                // Medium In-Scattering: Direct lighting (NEE)
+                if (scene.use_nee) {
+                    DirectionSample ds;
+                    Color3f em_weight;
+                    Point3f u3(sampler.next1D(), sampler.next1D(), sampler.next1D());
+                    SurfaceInteraction ref_si;
+                    ref_si.p = mi.p;
+
+                    if (emitter_sampler.sample_direction(scene, ref_si, u3, ds, em_weight)) {
+                        float shadow_dist = ds.dist - 1e-4f;
+                        Color3f shadow_tr = eval_shadow_transmittance(scene, mi.p, ds.d, shadow_dist, current_medium_id, ds.mesh_id);
+
+                        if (shadow_tr.maxComponent() > 0.f) {
+                            float p_val = Phase::eval(current_medium->g, mi.wo, ds.d);
+                            float mis = ds.delta ? 1.f : mis_weight(ds.pdf, p_val);
+                            L += beta * p_val * ds.Le * shadow_tr * (mis / ds.pdf);
+                        }
+                    }
+                }
+
+                // Sample Phase function
+                PhaseSample ps;
+                Vector3f wo = Phase::sample(current_medium->g, mi.wo, sampler.next2D(), ps);
+                if (ps.pdf <= 0.f) break;
+
+                prev_p      = mi.p;
+                prev_pdf    = ps.pdf;
+                prev_delta  = false;
+                current_ray = Ray(mi.p, wo, 1e-4f, Infinity);
+            } else {
+                // Surface Interaction or Environment Miss
+                Color3f Le = emitter_sampler.eval_direct_emission(scene, si, hit, current_ray, prev_p, prev_pdf, prev_delta);
+                L += beta * Le;
+
+                if (!hit) break;
+
+                const Material& mat = scene.materials[si.material_id];
+
+                // Medium boundary transition (null BSDF interface)
+                if (mat.type == BSDF_ID_NULL) {
+                    bool entering = (dot(si.n, current_ray.d) < 0.f);
+                    current_medium_id = entering ? mat.interiorMediumId : mat.exteriorMediumId;
+                    current_ray = si.spawn_ray(current_ray.d);
+                    prev_delta = true;
+                    continue;
+                }
+
+                const bool scatterable = !BSDF::is_delta(mat.type);
+
+                // Surface Emitter Sampling (NEE)
+                if (scene.use_nee && scatterable) {
+                    DirectionSample ds;
+                    Color3f em_weight;
+                    Point3f u3(sampler.next1D(), sampler.next1D(), sampler.next1D());
+
+                    if (emitter_sampler.sample_direction(scene, si, u3, ds, em_weight)) {
+                        Vector3f wo_local = si.to_local(ds.d);
+                        float cos_theta = Frame::cos_theta(wo_local);
+
+                        if (cos_theta > 0.f) {
+                            Color3f f_bsdf;
+                            float bsdf_pdf = 0.f;
+                            BSDF::eval_pdf(mat, si, wo_local, f_bsdf, bsdf_pdf);
+
+                            float shadow_dist = ds.dist - 1e-4f;
+                            Point3f shadow_o = si.spawn_ray(ds.d).o;
+                            Color3f shadow_tr = eval_shadow_transmittance(scene, shadow_o, ds.d, shadow_dist, current_medium_id, ds.mesh_id);
+
+                            if (shadow_tr.maxComponent() > 0.f) {
+                                float mis = ds.delta ? 1.f : mis_weight(ds.pdf, bsdf_pdf);
+                                L += beta * f_bsdf * ds.Le * shadow_tr * (cos_theta * mis / ds.pdf);
                             }
                         }
                     }
                 }
+
+                // Sample BSDF
+                BSDFSample bs;
+                Color3f bsdf_w = BSDF::sample(mat, si, bs, sampler.next2D());
+                if (!bs.is_valid()) break;
+
+                // Update medium if transmitting through boundary
+                if (bs.is_transmissive()) {
+                    bool entering = (dot(si.n, current_ray.d) < 0.f);
+                    current_medium_id = entering ? mat.interiorMediumId : mat.exteriorMediumId;
+                }
+
+                beta *= bsdf_w;
+                eta  *= bs.eta;
+
+                prev_p          = si.p;
+                prev_pdf        = bs.pdf;
+                prev_delta      = BSDF::is_delta(mat.type);
+                current_ray     = si.spawn_ray(si.to_world(bs.wo));
             }
 
-            BSDFSample bs;
-            Color3f f_bsdf = BSDF::sample(mat, si, bs, sampler.next2D());
-            if (f_bsdf.x <= 0.f && f_bsdf.y <= 0.f && f_bsdf.z <= 0.f) break;
-            if (!bs.is_valid()) break;
-
-            current_ray = si.spawn_ray(si.to_world(bs.wo));
-            eta *= bs.eta;
-            beta *= f_bsdf;
-            prev_p = si.p;
-            prev_bsdf_pdf = bs.pdf;
-            prev_bsdf_delta = BSDF::is_delta(mat.type);
-
-            float beta_max = fmaxf(beta.x, fmaxf(beta.y, beta.z));
-            if (beta_max <= 0.f) break;
+            // Russian roulette
+            const float max_beta = beta.maxComponent();
+            if (max_beta <= 0.f) break;
 
             if (depth >= rr_depth) {
-                float rr_prob = fminf(beta_max / (eta * eta), 0.95f);
+                const float rr_prob = fminf(fmaxf(max_beta / (eta * eta), 0.05f), 0.95f);
                 if (sampler.next1D() >= rr_prob) break;
-                beta *= 1.f / rr_prob;
+                beta /= rr_prob;
             }
         }
 
@@ -168,18 +205,4 @@ struct VolumetricPath {
     }
 };
 
-} // namespace futaba
-
-#if !defined(__CUDACC__) && defined(NANOGUI_GLAD)
-#include "integrator_ui.h"
-
-namespace futaba {
-
-class VolPathIntegratorUI : public IntegratorUI {
-public:
-    std::string getName() const override { return "VolPath"; }
-    int getMode() const override { return INTEGRATOR_VOLPATH; }
-};
-
-} // namespace futaba
-#endif
+FUTABA_NAMESPACE_END

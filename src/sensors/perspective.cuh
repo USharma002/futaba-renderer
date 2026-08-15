@@ -7,7 +7,7 @@
 #include "warp.cuh"
 #include <cmath>
 
-namespace futaba {
+FUTABA_NAMESPACE_BEGIN
 
 class PerspectiveCamera {
 public:
@@ -131,4 +131,4 @@ public:
     }
 };
 
-} // namespace futaba
+FUTABA_NAMESPACE_END

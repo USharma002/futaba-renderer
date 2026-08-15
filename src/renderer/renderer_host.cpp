@@ -2,20 +2,19 @@
 #include "renderer.h"
 #include "distribution.cuh"
 #include "denoiser.h"
-#include "training_buffer.h"
-#include "scene_uploader.h"
 #include "scene_loader.h"
+#include "optix_pipeline.h"
 #include <iostream>
 #include <optix.h>
 #include <optix_stubs.h>
 #include <vector>
 #include <atomic>
 
-namespace futaba {
+FUTABA_NAMESPACE_BEGIN
     std::atomic<float> g_optixCompileProgress(0.0f);
     std::atomic<const char*> g_optixCompileStatus("Starting OptiX compilation...");
     std::atomic<bool> g_optixCompileCompleted(false);
-}
+FUTABA_NAMESPACE_END
 
 using namespace futaba;
 
@@ -42,22 +41,19 @@ static void addRectangle(std::vector<Triangle> &tris, const Point3f &p0,
 
 // Cornell box fallback scene — now builds proper emitter data for NEE.
 void buildCornellBox(Scene &scene) {
-  LoadedScene loaded;
+  CPUScene loaded;
 
   // Materials
-  loaded.materials.push_back(
-      Material(Color3f(0.886f, 0.699f, 0.666f), Color3f(0.f))); // 0 white
-  loaded.materials.push_back(
-      Material(Color3f(0.105f, 0.378f, 0.076f), Color3f(0.f))); // 1 green
-  loaded.materials.push_back(
-      Material(Color3f(0.570f, 0.043f, 0.044f), Color3f(0.f))); // 2 red
-  loaded.materials.push_back(Material(Color3f(0.886f, 0.699f, 0.666f),
-                               Color3f(18.4f, 14.f, 6.8f))); // 3 light
+  loaded.materials = {
+      Material(Color3f(0.886f, 0.699f, 0.666f), Color3f(0.f)), // 0 white
+      Material(Color3f(0.105f, 0.378f, 0.076f), Color3f(0.f)), // 1 green
+      Material(Color3f(0.570f, 0.043f, 0.044f), Color3f(0.f)), // 2 red
+      Material(Color3f(0.886f, 0.699f, 0.666f), Color3f(18.4f, 14.f, 6.8f)) // 3 light
+  };
   loaded.materialTexturePaths.resize(4);
 
   // Each surface gets its own mesh_id so it maps to its MeshInstanceGPU.
-  //   mesh 0 = floor, mesh 1 = ceiling, mesh 2 = back wall,
-  //   mesh 3 = left wall, mesh 4 = right wall, mesh 5 = light
+  // 0 = floor, 1 = ceiling, 2 = back wall, 3 = left wall, 4 = right wall, 5 = light
   addRectangle(loaded.triangles, Point3f(-1.f, -1.f, -1.f), Point3f(1.f, -1.f, -1.f),
                Point3f(1.f, -1.f, 1.f), Point3f(-1.f, -1.f, 1.f), 0, 0);
   addRectangle(loaded.triangles, Point3f(-1.f, 1.f, 1.f), Point3f(1.f, 1.f, 1.f),
@@ -68,7 +64,7 @@ void buildCornellBox(Scene &scene) {
                Point3f(-1.f, 1.f, -1.f), Point3f(-1.f, -1.f, -1.f), 1, 3);
   addRectangle(loaded.triangles, Point3f(1.f, -1.f, -1.f), Point3f(1.f, 1.f, -1.f),
                Point3f(1.f, 1.f, 1.f), Point3f(1.f, -1.f, 1.f), 2, 4);
-  // Area light
+
   const float ls = 0.23f, lh = 0.99f;
   addRectangle(loaded.triangles, Point3f(-ls, lh, -0.19f), Point3f(ls, lh, -0.19f),
                Point3f(ls, lh, 0.19f), Point3f(-ls, lh, 0.19f), 3, 5);
@@ -97,49 +93,39 @@ void buildCornellBox(Scene &scene) {
     loaded.meshes.push_back(m);
   }
 
-  TextureManager dummyManager;
-  SceneUploader::upload(loaded, "", scene, dummyManager, true, true);
+  scene.load(loaded);
 }
 
-#include "optix_pipeline.h"
-
-namespace futaba {
+FUTABA_NAMESPACE_BEGIN
     void launch_initial_pipeline_compile() {
         g_pipeline.init();
     }
-}
+FUTABA_NAMESPACE_END
 
 void launch_render(HDRFilm *film,
                    DenoiserManager* denoiser,
                    LaunchParams params) {
-  g_pipeline.init();
-
   film->sampleCount++;
 
   params.film_pixels = film->d_pixels;
   params.sampleCount = film->sampleCount;
-  
-  if (params.denoise_active && denoiser) {
-    params.denoise_albedo_buffer = denoiser->getAlbedoBuffer();
-    params.denoise_normal_buffer = denoiser->getNormalBuffer();
+
+  const bool denoising = params.denoise.active && denoiser;
+  if (denoising) {
+    params.denoise.albedo_buffer = denoiser->getAlbedoBuffer();
+    params.denoise.normal_buffer = denoiser->getNormalBuffer();
   } else {
-    params.denoise_albedo_buffer = nullptr;
-    params.denoise_normal_buffer = nullptr;
+    params.denoise.albedo_buffer = nullptr;
+    params.denoise.normal_buffer = nullptr;
   }
 
   // Copy parameters asynchronously to the GPU using the render stream
   cudaMemcpyAsync(g_pipeline.d_params.get(), &params,
                   sizeof(LaunchParams), cudaMemcpyHostToDevice, g_pipeline.renderStream);
 
-  int raygen_idx = 0; // default to render/preview
-  if (params.integrator_mode == INTEGRATOR_PATH) {
-      raygen_idx = 1;
-  } else if (params.integrator_mode == INTEGRATOR_VOLPATH) {
-      raygen_idx = 2;
-  }
-  g_pipeline.sbt.raygenRecord = reinterpret_cast<CUdeviceptr>(
-      g_pipeline.d_raygenRecordsBase.get() + raygen_idx * sizeof(EmptyRecord)
-  );
+  g_pipeline.sbt.raygenRecord = (params.integrator_mode == INTEGRATOR_PATH || params.integrator_mode == INTEGRATOR_VOLPATH)
+      ? g_pipeline.raygenRecordPath
+      : g_pipeline.raygenRecordRender;
 
   // Launch OptiX on the render stream
   optixLaunch(g_pipeline.pipeline,
@@ -147,31 +133,15 @@ void launch_render(HDRFilm *film,
               reinterpret_cast<CUdeviceptr>(g_pipeline.d_params.get()), sizeof(LaunchParams),
               &g_pipeline.sbt, params.width, params.height, 1);
 
-  if (params.denoise_active && denoiser) {
+  if (denoising) {
     denoiser->exec(
         film->d_pixels,
         denoiser->getAlbedoBuffer(),
         denoiser->getNormalBuffer(),
         film->sampleCount,
         params.pbo_ptr,
-        params.tonemapping_mode
-    );
-  }
-
-  if (params.vis_active && params.vis_pbo_ptr) {
-    run_visualization_kernel(
-        params.train_active,
-        params.train_position,
-        params.train_normals,
-        params.train_wi,
-        params.train_wo,
-        params.train_radiance,
-        params.train_material_id,
-        params.width, params.height,
-        params.max_depth,
-        params.vis_depth,
-        params.vis_buffer_type,
-        params.vis_pbo_ptr
+        params.tonemapping_mode,
+        g_pipeline.renderStream
     );
   }
 

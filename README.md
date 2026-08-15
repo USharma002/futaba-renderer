@@ -9,6 +9,10 @@ Futaba is a high-performance, learning-oriented physically-based renderer writte
 | Dragon Cornell Box | Depth of Field |
 |:---:|:---:|
 | ![Dragon CBox](assets/dragon-cbox.png) | ![Chess DOF](assets/chess-dof.png) |
+| **Volumetric Cornell Box** | **Veach MIS** |
+| ![Volumetric Cornell Box](assets/cbox-volume.png) | ![Veach MIS](assets/veach-mis.png) |
+| **Ford Mustang GT3** | **Teapot Filled** |
+| ![Ford Mustang GT3](assets/mustang.png) | ![Teapot Filled](assets/teapot-full.png) |
 
 
 ## Available Visualizations
@@ -47,14 +51,19 @@ Futaba is a high-performance, learning-oriented physically-based renderer writte
 - [x] **Integrators**: 
   - [x] **Path Tracing**: Full Monte Carlo integration with Russian Roulette.
     ![Path Tracing](assets/dragon-cbox.png)
-  - [x] **Next Event Estimation**: Direct-lighting support for emissive geometry and environment lighting.
+  - [x] **Volumetric Path Tracing**: Radiative transport in homogeneous participating media with Henyey-Greenstein (HG) & Isotropic phase functions.
+  - [x] **Next Event Estimation**: Direct-lighting support for emissive geometry and environment lighting with Multiple Importance Sampling (MIS).
   - [x] **Normals**: Surface normal visualization for debugging.
     ![Surface Normals](assets/dragon-cbox-normals.png)
   - [x] **Heatmap**: AABB intersection complexity visualization.
     ![Intersection Heatmap](assets/dragon-cbox-heatmap.png)
+- [x] **Materials & Textures**:
+  - Full BSDF suite: Diffuse, Dielectric, Thin Dielectric, Rough Conductor, Rough Dielectric, Rough Plastic (Beckmann microfacet model).
+  - Image textures with sRGB-to-linear conversion.
+  - Tangent-space **Normal Mapping** & **Bump Mapping** with per-triangle UV derivative frame derivation.
+- [x] **Path Guiding**: Practical Path Guiding (PPG) using adaptive spatial-directional quadtrees (SD-trees).
 - [x] **Films**: 32-bit HDR accumulation with zero-copy OpenGL PBO display and EXR export support.
 - [x] **Denoising**: Optional OptiX AI denoiser with albedo/normal guide buffers and tonemapped output.
-- [x] **Path guiding** selector (None / SD-Tree PPG) with dedicated guiding controls panel
 
 
 #### Denoising Demo
@@ -73,11 +82,11 @@ Futaba is a high-performance, learning-oriented physically-based renderer writte
 - [x] Image textures on materials
 - [x] Rough conductor / dielectric / plastic BSDFs (Beckmann microfacet)
 - [x] OptiX AI denoising with guide buffers
-- [x] Path Guiding (PPG)
+- [x] Path Guiding (PPG with SD-trees)
+- [x] Bump / normal mapping
 - [ ] Bidirectional path tracing
 - [ ] Photon mapping
 - [ ] Disney principled BSDF
-- [ ] Bump / normal mapping
 - [ ] Spectral rendering
 
 ---
@@ -88,69 +97,55 @@ Futaba is a high-performance, learning-oriented physically-based renderer writte
 
 1. **Sensor** --- generates primary rays on the GPU from the perspective camera, with optional thin-lens DoF and subpixel jitter for anti-aliasing
 2. **OptiX Ray Tracing** --- dispatches rays through `__raygen__` / `__closesthit__` / `__miss__` programs using hardware RT cores
-3. **Integrator** --- CUDA kernel computes radiance; selects path tracer, volumetric path tracer, or visualization mode
+3. **Integrator** --- CUDA kernel computes radiance; selects path tracer or visualization mode
 4. **BSDF** --- GPU-side material dispatch evaluates and samples the appropriate lobe (diffuse, microfacet, dielectric, etc.)
 5. **Emitter Sampling** --- NEE samples area lights, point/directional lights, and environment map; MIS weights combine with BSDF sample
-6. **Path Guiding** --- SD-Tree records training data per bounce; after each iteration, the quadtrees are refined and uploaded back to device for the next pass
-7. **Film** --- samples accumulate into a 32-bit float PBO for zero-copy OpenGL display; denoiser reads albedo/normal guide buffers and writes tonemapped output
+6. **Film** --- samples accumulate into a 32-bit float PBO for zero-copy OpenGL display; denoiser reads albedo/normal guide buffers and writes tonemapped output
 
 ```mermaid
-%%{init: {'flowchart': {'curve': 'linear'}}}%%
 flowchart TD
 
-classDef cpu fill:#e3f2fd,stroke:#1565c0,stroke-width:2px,color:#000;
-classDef gpu fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px,color:#000;
-classDef data fill:#fff3e0,stroke:#e65100,stroke-width:2px,color:#000;
+    subgraph Host ["Host (CPU)"]
+        direction TB
+        main["main.cpp"] --> FS["FutabaScreen (NanoGUI Viewport)"]
+        FS -->|"Load XML"| SL["SceneLoader"]
+        SL -->|"Build Scene"| LS["LoadedScene"]
+        LS -->|"Initialize"| RH["RendererHost"]
+        FS -->|"Interactive Controls"| RH
+    end
 
-main[main.cpp]:::cpu
-FS[FutabaScreen]:::cpu
-SL[SceneLoader]:::cpu
-LS[LoadedScene CPU]:::data
-RH[RendererHost]:::cpu
+    subgraph Device ["Device Pipeline (CUDA / OptiX)"]
+        direction TB
+        RH -->|"Configure"| OPTIX["OptiX Acceleration Structure"]
+        RH -->|"Upload"| SCENE["Scene Resources (Meshes / Materials / Media)"]
+        RH -->|"Launch"| KERNEL["CUDA Render Kernel"]
 
-OPTIX[OptixPipeline]:::cpu
-KERNEL[CUDA Render Kernel]:::gpu
-SGPU[Scene GPU]:::gpu
+        KERNEL --> CAM["Camera & Sampler"]
+        KERNEL --> INTG["Integrator (Path / VolPath)"]
 
-SAMP[Sampler]:::gpu
-CAM[PerspectiveCamera]:::gpu
-INTG[Integrator]:::gpu
-FILM[HDRFilm]:::data
-DENOISE[DenoiserManager]:::gpu
-GUIDE[Guiding & Training Buffer]:::data
+        INTG <-->|"Hardware RT Cores"| OPTIX
+        INTG -->|"Evaluate BSDF & Phase"| MATS["BSDFs / Media / Emitters"]
+        SCENE -.-> MATS
+    end
 
-BVH[BVH / Nodes]:::data
-TRIS[Geometry]:::data
-MATS[Materials]:::data
-EMITS[Emitters]:::data
+    subgraph Output ["Film & Post-Processing"]
+        direction TB
+        INTG -->|"Write Albedo & Normals"| REC["PathRecorder (Guide Buffers)"]
+        KERNEL -->|"Accumulate Radiance"| FILM["32-bit HDR Film (PBO)"]
+        
+        REC -->|"Guide Buffers"| DENOISE["OptiX AI Denoiser"]
+        FS -->|"Trigger Denoise"| DENOISE
+        DENOISE -->|"Denoised Frame"| FILM
+        FILM -.->|"Zero-Copy OpenGL Display"| FS
+    end
 
-main --> FS
-FS -->|Loads XML| SL
-SL -->|Builds| LS
-LS -->|Passes to| RH
-FS -->|Drives| RH
+    classDef cpu fill:#e3f2fd,stroke:#1565c0,stroke-width:1.5px,color:#0d47a1;
+    classDef gpu fill:#e8f5e9,stroke:#2e7d32,stroke-width:1.5px,color:#1b5e20;
+    classDef data fill:#fff3e0,stroke:#e65100,stroke-width:1.5px,color:#bf360c;
 
-RH -->|Configures| OPTIX
-RH -->|Allocates| SGPU
-RH -->|Dispatches| KERNEL
-
-SGPU --> BVH
-SGPU --> TRIS
-SGPU --> MATS
-SGPU --> EMITS
-
-KERNEL --> SAMP
-KERNEL --> CAM
-KERNEL --> INTG
-
-INTG -->|Query & Shade| SGPU
-INTG -->|Records Path Data| GUIDE
-GUIDE -->|Guides Rays| INTG
-
-KERNEL -->|Accumulate| FILM
-FS -->|Executes Denoising| DENOISE
-DENOISE -->|Denoises Beauty/Albedo/Normal| FILM
-FILM -.->|Display Texture| FS
+    class main,FS,SL,RH cpu;
+    class OPTIX,KERNEL,CAM,INTG,MATS,DENOISE gpu;
+    class LS,SCENE,REC,FILM data;
 ```
 
 ## Building and Running
@@ -168,8 +163,17 @@ cmake ..
 cmake --build . --config Release
 ```
 
-## References
+## References & Credits
 
+### 3D Models & Test Scenes
+- **Ford Mustang GT3**: Model created by [vecarz.com](https://sketchfab.com/3d-models/ford-mustang-gt3-wwwvecarzcom-061487e4e4fa4cd1bf7e15eae2e238ba) on Sketchfab (CC Attribution).
+- **Stanford 3D Scanning Repository**: [Stanford Computer Graphics Laboratory](https://graphics.stanford.edu/data/3Dscanrep/) (Stanford Dragon, Stanford Bunny).
+- **Rendering Resources & Scenes**: [Benedikt Bitterli's Rendering Resources](https://benedikt-bitterli.me/resources/) (Cornell Box, Glass of Water, Spaceship, Teapot, etc.).
+- **Veach MIS**: Eric Veach (1997), [*Robust Monte Carlo Methods for Light Transport Simulation*](https://graphics.stanford.edu/papers/veach_thesis/).
+- **The Cornell Box**: [Cornell University Program of Computer Graphics](https://www.graphics.cornell.edu/online/box/).
+- **Utah Teapot**: Martin Newell (1975).
+
+### Literature & Frameworks
 - Müller et al., [*Practical Path Guiding for Efficient Light-Transport Simulation*](https://tom94.net/pages/publications/mueller17practical-erratum), EGSR 2017
 - Pharr, Jakob, Humphreys --- *Physically Based Rendering: From Theory to Implementation* (PBRT)
 - [Mitsuba Renderer](https://www.mitsuba-renderer.org/) --- scene format reference

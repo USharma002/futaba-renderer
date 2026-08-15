@@ -3,18 +3,27 @@
 #include "types.cuh"
 #include "common.cuh"
 #include "warp.cuh"
+#include "phase_sample.cuh"
 
-namespace futaba {
+FUTABA_NAMESPACE_BEGIN
 
-struct IsotropicPhaseFunction {
-    HD float eval(float /*cosTheta*/) const {
-        return INV_FOURPI;
+struct IsotropicPhase {
+    HD IsotropicPhase() {}
+
+    HD float eval(const Vector3f& /*wo*/, const Vector3f& /*wi*/) const {
+        return Inv4Pi;
     }
 
-    HD void sample(const Vector3f& /*wi*/, const Point2f& u, Vector3f& wo, float& pdf) const {
-        wo = Warp::squareToUniformSphere(u);
-        pdf = Warp::squareToUniformSpherePdf(wo);
+    HD float pdf(const Vector3f& /*wo*/, const Vector3f& /*wi*/) const {
+        return Inv4Pi;
+    }
+
+    HD Vector3f sample(const Vector3f& /*wo*/, const Point2f& u, PhaseSample& ps) const {
+        ps.wi     = Warp::squareToUniformSphere(u);
+        ps.pdf    = Inv4Pi;
+        ps.weight = Color3f(1.0f);
+        return ps.wi;
     }
 };
 
-} // namespace futaba
+FUTABA_NAMESPACE_END

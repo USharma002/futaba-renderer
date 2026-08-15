@@ -3,7 +3,7 @@
 #include "types.cuh"
 #include <cuda_runtime.h>
 
-namespace futaba {
+FUTABA_NAMESPACE_BEGIN
 class Bitmap;
 
 class HDRFilm {
@@ -33,4 +33,4 @@ public:
     Bitmap* toBitmap(const float4* d_alternative_pixels = nullptr) const;
 };
 
-} // namespace futaba
+FUTABA_NAMESPACE_END

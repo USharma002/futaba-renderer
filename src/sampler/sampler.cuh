@@ -3,7 +3,7 @@
 #include <cstdint>
 #include "types.cuh"
 
-namespace futaba {
+FUTABA_NAMESPACE_BEGIN
 
 struct pcg32 {
     uint64_t state = 0x853c49e6748fea9bull;
@@ -54,4 +54,4 @@ struct Sampler {
     }
 };
 
-} // namespace futaba
+FUTABA_NAMESPACE_END

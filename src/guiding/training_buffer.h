@@ -2,81 +2,52 @@
 
 #include "types.cuh"
 #include "cuda_unique_ptr.h"
-#include <vector_types.h>
-#include <string>
+#include <cuda_runtime.h>
 
 namespace futaba {
 
-struct TrainingBuffers {
-    float* active = nullptr;
-    Point3f* position = nullptr;
-    Color3f* normals = nullptr;
-    Color3f* wi = nullptr;
-    Color3f* wo = nullptr;
-    Color3f* radiance = nullptr;
-    float* direction_pdf = nullptr;
-    float* material_id = nullptr;
-    int max_depth = 0;
-    int pixel_index = -1;
-    int img_size = 0;
-};
-
+// GPU scratch buffers filled by the path integrator during a training pass.
+// Layout is one entry per (pixel, path vertex): slot = pixel * maxDepth + depth.
+// The host reads these back and builds the SD-tree on the CPU.
 class TrainingBufferManager {
 public:
-    TrainingBufferManager();
-    ~TrainingBufferManager();
+    void allocate(int width, int height, int maxDepth) {
+        const size_t count = static_cast<size_t>(width) * height * maxDepth;
+        if (count == m_count) return;
+        m_count = count;
+        m_active.reset(alloc<float>(count));
+        m_position.reset(alloc<Point3f>(count));
+        m_wo.reset(alloc<Vector3f>(count));
+        m_radiance.reset(alloc<Color3f>(count));
+        m_pdf.reset(alloc<float>(count));
+    }
 
-    // Allocate GPU buffers based on resolution and max depth
-    void allocate(int width, int height, int maxDepth);
+    // Only 'active' needs zeroing: the host skips inactive slots.
+    void clear() {
+        if (m_count > 0) cudaMemset(m_active.get(), 0, m_count * sizeof(float));
+    }
 
-    // Clear all training buffers on the GPU to zero/default values
-    void clear();
-
-    // Free all allocated training buffers
-    void freeBuffers();
-
-    // Save training buffers to flat binary files with a companion metadata file
-    void save(const std::string& basePath, int width, int height, int maxDepth);
-
-    // Getters for device pointers
-    float* getActive() const { return m_dActive.get(); }
-    Point3f* getPosition() const { return m_dPosition.get(); }
-    Color3f* getNormals() const { return m_dNormals.get(); }
-    Color3f* getWi() const { return m_dWi.get(); }
-    Color3f* getWo() const { return m_dWo.get(); }
-    Color3f* getRadiance() const { return m_dRadiance.get(); }
-    float* getDirectionPdf() const { return m_dDirectionPdf.get(); }
-    float* getMaterialId() const { return m_dMaterialId.get(); }
-
-    // Run visualization kernel to write the selected channel/depth to a PBO
-    void visualize(int width, int height, int maxDepth, int selectedDepth, int selectedBufferType, uchar4* d_pbo_ptr);
+    size_t    count()    const { return m_count; }
+    float*    active()   const { return m_active.get(); }
+    Point3f*  position() const { return m_position.get(); }
+    Vector3f* wo()       const { return m_wo.get(); }
+    Color3f*  radiance() const { return m_radiance.get(); }
+    float*    pdf()      const { return m_pdf.get(); }
 
 private:
-    CudaUniquePtr<float> m_dActive;
-    CudaUniquePtr<Point3f> m_dPosition;
-    CudaUniquePtr<Color3f> m_dNormals;
-    CudaUniquePtr<Color3f> m_dWi;
-    CudaUniquePtr<Color3f> m_dWo;
-    CudaUniquePtr<Color3f> m_dRadiance;
-    CudaUniquePtr<float> m_dDirectionPdf;
-    CudaUniquePtr<float> m_dMaterialId;
+    template <typename T>
+    static T* alloc(size_t count) {
+        T* ptr = nullptr;
+        cudaMalloc(&ptr, count * sizeof(T));
+        return ptr;
+    }
 
-    size_t m_allocatedCount = 0;
+    CudaUniquePtr<float>    m_active;
+    CudaUniquePtr<Point3f>  m_position;
+    CudaUniquePtr<Vector3f> m_wo;
+    CudaUniquePtr<Color3f>  m_radiance;
+    CudaUniquePtr<float>    m_pdf;
+    size_t m_count = 0;
 };
-
-extern void run_visualization_kernel(
-    const float* train_active,
-    const Point3f* train_position,
-    const Color3f* train_normals,
-    const Color3f* train_wi,
-    const Color3f* train_wo,
-    const Color3f* train_radiance,
-    const float* train_material_id,
-    int width, int height,
-    int max_depth,
-    int selected_depth,
-    int selected_buffer_type,
-    uchar4* pbo_ptr
-);
 
 } // namespace futaba

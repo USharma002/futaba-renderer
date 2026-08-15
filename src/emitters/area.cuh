@@ -7,12 +7,12 @@
 #include "distribution.cuh"
 #include "emitter_sample.cuh"
 
-namespace futaba {
+FUTABA_NAMESPACE_BEGIN
 
 struct AreaEmitter {
     // Samples a point on the area lights in the scene
     HD bool sample(const Scene&              scene,
-                   const SurfaceIntersection& ref,
+                   const SurfaceInteraction& ref,
                    const Point3f&             u,
                    const CDFLightSamplerData& data,
                    EmitterSample&             es) const
@@ -38,36 +38,39 @@ struct AreaEmitter {
         const float    d2   = dist * dist;
         const Vector3f wi   = v / dist;
 
-        // Precompute triangle normal and area together to save redundant cross products & length calculations
+        // Precompute triangle normal and area together; len_cross cancels out in solid-angle PDF:
+        // Area = 0.5 * len, cos_e = dot(cross_p, -wi) / len
+        // pdf = (prob_tri / Area) * d2 / cos_e = 2.0f * prob_tri * d2 / dot(cross_p, -wi)
         const Vector3f e1 = tri.p1 - tri.p0;
         const Vector3f e2 = tri.p2 - tri.p0;
         const Vector3f cross_p = cross(e1, e2);
-        const float len_cross = length(cross_p);
-        if (len_cross <= 0.f || data.emitterTriangleFuncSum <= 0.f) return false;
+        const float dot_cross_wi = dot(cross_p, -wi);
 
-        const float area = 0.5f * len_cross;
-        const float prob_tri = weight_val;
-        const float pdf_A    = prob_tri / area;
-        if (pdf_A <= 0.f) return false;
+        bool is_two_sided = true;
+        if (tri.mesh_id >= 0 && (uint32_t)tri.mesh_id < scene.meshCount && scene.meshes != nullptr) {
+            int eid = scene.meshes[tri.mesh_id].emitterId;
+            if (eid >= 0 && (uint32_t)eid < scene.emitterCount && scene.emitters != nullptr) {
+                is_two_sided = scene.emitters[eid].twoSided;
+            }
+        }
 
-        const Vector3f n_e   = cross_p / len_cross; // normalize using the precomputed length
-        const float    cos_e = dot(n_e, -wi);
-        if (cos_e <= 0.f) { es.pdf = 0.f; return true; }
+        const float cos_e = is_two_sided ? fabsf(dot_cross_wi) : dot_cross_wi;
+        if (cos_e <= 0.f || data.emitterTriangleFuncSum <= 0.f) { es.pdf = 0.f; return true; }
 
         es.p            = p_e;
         es.d            = wi;
         es.dist         = dist;
-        es.pdf          = pdf_A * d2 / cos_e;
+        es.pdf          = 2.0f * weight_val * d2 / cos_e;
         es.delta        = false;
         es.primitive_id = tri_id;
         es.mesh_id      = tri.mesh_id;
 
         // Evaluate emitter radiance
-        SurfaceIntersection light_si;
+        SurfaceInteraction light_si;
         light_si.shape_id     = tri.mesh_id;
         light_si.material_id  = tri.material_id;
         light_si.primitive_id = tri_id;
-        light_si.front_face   = true;
+        light_si.front_face   = (dot_cross_wi >= 0.f);
         es.Le = scene.eval_surface_emission(light_si);
         return true;
     }
@@ -93,16 +96,21 @@ struct AreaEmitter {
         const Vector3f e1 = tri.p1 - tri.p0;
         const Vector3f e2 = tri.p2 - tri.p0;
         const Vector3f cross_p = cross(e1, e2);
-        const float len_cross = length(cross_p);
-        if (len_cross <= 0.f) return 0.f;
+        const float dot_cross_wi = dot(cross_p, -wi);
 
-        const float area = 0.5f * len_cross;
-        const Vector3f n_e = cross_p / len_cross;
-        const float cos_e  = dot(n_e, -wi);
+        bool is_two_sided = true;
+        if (tri.mesh_id >= 0 && (uint32_t)tri.mesh_id < scene.meshCount && scene.meshes != nullptr) {
+            int eid = scene.meshes[tri.mesh_id].emitterId;
+            if (eid >= 0 && (uint32_t)eid < scene.emitterCount && scene.emitters != nullptr) {
+                is_two_sided = scene.emitters[eid].twoSided;
+            }
+        }
+
+        const float cos_e = is_two_sided ? fabsf(dot_cross_wi) : dot_cross_wi;
         if (cos_e <= 0.f) return 0.f;
 
-        return (prob_tri / area) * (dist * dist) / cos_e;
+        return (2.0f * prob_tri * dist * dist) / cos_e;
     }
 };
 
-} // namespace futaba
+FUTABA_NAMESPACE_END

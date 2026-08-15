@@ -2,79 +2,54 @@
 
 #include <string>
 #include <vector>
+#include <algorithm>
 #include "types.cuh"
-#include "perspective.cuh"
 
-namespace futaba {
-    struct Triangle;
-    struct Material;
-}
+#include "material.cuh"
+#include "triangle.cuh"
+#include "bbox.cuh"
+#include "emitter.cuh"
+#include "mesh.cuh"
+#include "medium.cuh"
 
-namespace futaba {
+FUTABA_NAMESPACE_BEGIN
 
-// ---------------------------------------------------------------------------
-// Emitter type enum (CPU side).
-// GPU-side constants in scene/scene.cuh (kEmitterType*) must stay in sync.
-// ---------------------------------------------------------------------------
-enum class EmitterType : uint32_t {
-    None        = 0,
-    Area        = 1,
-    Point       = 2,
-    Directional = 3,
-};
-
-// Generic emitter instance produced by the parser.
-struct EmitterInstance {
-    EmitterType type      = EmitterType::None;
-    Color3f     radiance  = Color3f(0.f);
-    Point3f     position  = Point3f(0.f, 0.f, 0.f); // point emitters
-    ::Vector3f  direction = ::Vector3f(0.f, -1.f, 0.f); // directional emitters
-    bool        twoSided  = true; // area emitters: emit from both faces unless true
-
-    EmitterInstance() = default;
-    explicit EmitterInstance(EmitterType t) : type(t) {}
-};
-
-// Per-mesh metadata kept alongside the flat triangle array.
-struct MeshInstance {
-    std::string  name;
-    uint32_t     triangleStart;   // First triangle index in the flat array
-    uint32_t     triangleCount;
-    Matrix4f     transform;       // World transform (already baked into triangles)
-    Point3f      boundingBoxMin;  // World-space AABB corners
-    Point3f      boundingBoxMax;
-    int          materialId;      // Index into LoadedScene::materials
-    EmitterType  emitterType = EmitterType::None;
-    int          emitterId   = -1; // Index into LoadedScene::emitters (-1 = none)
-};
-
-// Result of a successful scene load.
-struct LoadedScene {
-    std::vector<Triangle>       triangles;
-    std::vector<Material>       materials;
-    std::vector<std::string>    materialTexturePaths; // Same size as LoadedScene::materials
-    std::vector<EmitterInstance> emitters;
-    std::vector<MeshInstance>   meshes;
-
-    bool                 hasEnvMap = false;
-    bool                 hasMedium = false;
-    int                  mediumMeshId = -1;
-    Color3f              mediumSigmaS = Color3f(0.f);
-    Color3f              mediumSigmaA = Color3f(0.f);
-    Color3f              mediumSigmaT = Color3f(0.f);
-    float                mediumG = 0.f;
-    std::vector<Color3f>  envMapPixels;
-    int                  envMapWidth = 0;
-    int                  envMapHeight = 0;
-    Matrix4f             envMapToWorld;
-    bool                 hasConstantEnv = false;
-    Color3f              constantEnv = Color3f(0.f);
-
+// Camera staging configuration for GPU upload.
+struct CameraSettings {
     bool       hasCamera = false;
-    Point3f    camOrigin;
-    Point3f    camTarget;
-    ::Vector3f camUp  = ::Vector3f(0.f, 1.f, 0.f);
-    float      camFov = 45.f;
+    Point3f    origin = Point3f(0.f);
+    Point3f    target = Point3f(0.f);
+    Vector3f   up  = Vector3f(0.f, 1.f, 0.f);
+    float      fov = 45.f;
+};
+
+// Environment map staging configuration.
+struct EnvMapSettings {
+    bool                 hasEnvMap = false;
+    std::vector<Color3f> pixels; // CPU staging buffer (will be uploaded as CUDA texture)
+    int                  width = 0;
+    int                  height = 0;
+    Matrix4f             toWorld;
+
+    bool                 hasConstant = false;
+    Color3f              constantRadiance = Color3f(0.f);
+};
+
+// Result of a successful scene load (staging buffers for GPU allocation).
+struct CPUScene {
+    std::vector<Triangle>        triangles;
+    std::vector<Material>        materials;
+    std::vector<std::string>     materialTexturePaths; // Same size as CPUScene::materials
+    std::vector<std::string>     materialNormalMapPaths; // Same size as CPUScene::materials
+    std::vector<EmitterInstance>  emitters;
+    std::vector<MeshInstance>    meshes;
+    std::vector<std::string>     meshNames;            // CPU-only names, parallel to meshes
+    std::vector<Medium>          media;
+    std::vector<std::string>     mediumNames;
+
+    CameraSettings  camera;
+    EnvMapSettings  envMap;
+
     std::string integratorType = "path";
 
     // Non-fatal warnings collected during loading (e.g. unknown BSDF/emitter types).
@@ -88,41 +63,8 @@ struct LoadedScene {
 class SceneLoader {
 public:
     bool load(const std::string& xmlPath,
-              LoadedScene&       out,
+              CPUScene&          out,
               std::string&       errorOut);
-
-private:
-    // Parses one OBJ mesh file and appends triangles / mesh instance to out.
-    // normalTransform is the inverse-transpose of the upper-left 3×3 of
-    // transform, used to correctly transform vertex normals under non-uniform scale.
-    bool parseMesh(const std::string& baseDir,
-                   const std::string& objFilename,
-                   const std::string& meshName,
-                   int                materialId,
-                   int                emitterId,      // -1 if not emissive
-                   const Matrix4f&    transform,
-                   const Matrix4f&    normalTransform,
-                   LoadedScene&       out,
-                   std::string&       errorOut);
-
-    bool parseMeshPLY(const std::string& baseDir,
-                      const std::string& plyFilename,
-                      const std::string& meshName,
-                      int                materialId,
-                      int                emitterId,      // -1 if not emissive
-                      const Matrix4f&    transform,
-                      const Matrix4f&    normalTransform,
-                      LoadedScene&       out,
-                      std::string&       errorOut);
-
-    bool parseCamera(const std::string& originStr,
-                     const std::string& targetStr,
-                     const std::string& upStr,
-                     float              fov,
-                     LoadedScene&       out,
-                     std::string&       errorOut);
-
-    static Vector3f parseVec3(const std::string& s);
 };
 
-} // namespace futaba
+FUTABA_NAMESPACE_END

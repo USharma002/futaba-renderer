@@ -3,8 +3,9 @@
 #include <vector>
 #include <string>
 #include <cuda_runtime.h>
+#include "types.cuh"
 
-namespace futaba {
+FUTABA_NAMESPACE_BEGIN
 
 class TextureManager {
 public:
@@ -15,7 +16,7 @@ public:
     TextureManager(const TextureManager&) = delete;
     TextureManager& operator=(const TextureManager&) = delete;
 
-    cudaTextureObject_t createTexture(const std::string& filename);
+    cudaTextureObject_t createTexture(const std::string& filename, bool isSRGB = true);
     void clear();
 
     const std::vector<cudaArray*>& getArrays() const { return m_cudaTextureArrays; }
@@ -26,4 +27,4 @@ private:
     std::vector<cudaTextureObject_t> m_cudaTextureObjects;
 };
 
-} // namespace futaba
+FUTABA_NAMESPACE_END

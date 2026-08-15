@@ -8,124 +8,87 @@
 #include "scene.cuh"
 #include "scene_loader.h"
 #include "texture_manager.h"
-#include "scene_uploader.h"
 #include "denoiser.h"
+#include "camera_controller.h"
 #include "guiding.h"
-#include "training_buffer.h"
 
-namespace futaba {
+FUTABA_NAMESPACE_BEGIN
 class HDRFilm;
-}
+FUTABA_NAMESPACE_END
 
 class FutabaScreen : public nanogui::Screen {
 public:
-  FutabaScreen(int width, int height);
-  ~FutabaScreen();
-  void renderLoop();
+    FutabaScreen(int width, int height, const std::string& initialScenePath = "");
+    virtual ~FutabaScreen() override;
+    
+    void renderLoop();
 
 protected:
-  virtual bool keyboardEvent(int key, int scancode, int action,
-                             int modifiers) override;
-  virtual bool mouseButtonEvent(const nanogui::Vector2i &p, int button,
-                                bool down, int modifiers) override;
-  virtual bool mouseMotionEvent(const nanogui::Vector2i &p,
-                                const nanogui::Vector2i &rel, int button,
-                                int modifiers) override;
-  virtual bool scrollEvent(const nanogui::Vector2i &p,
-                           const nanogui::Vector2f &rel) override;
-  virtual bool resizeEvent(const nanogui::Vector2i &size) override;
+    virtual bool keyboardEvent(int key, int scancode, int action, int modifiers) override;
+    virtual bool mouseButtonEvent(const nanogui::Vector2i &p, int button, bool down, int modifiers) override;
+    virtual bool mouseMotionEvent(const nanogui::Vector2i &p, const nanogui::Vector2i &rel, int button, int modifiers) override;
+    virtual bool scrollEvent(const nanogui::Vector2i &p, const nanogui::Vector2f &rel) override;
+    virtual bool resizeEvent(const nanogui::Vector2i &size) override;
 
-  void updateCamera();
-
-  // Load a scene XML; returns false and shows a message box on failure.
-  bool loadScene(const std::string &xmlPath);
-  void recreateRenderTargets(int width, int height);
-  void drawGizmo();
+    void updateCamera();
+    bool loadScene(const std::string &xmlPath);
+    void recreateRenderTargets(int width, int height);
+    void drawGizmo();
+    futaba::LaunchParams populateLaunchParams(uchar4* pboPtr) const;
 
 private:
-  int m_renderWidth;
-  int m_renderHeight;
+    int m_renderWidth;
+    int m_renderHeight;
 
-  nanogui::Label *m_fpsLabel = nullptr;
-  nanogui::Label *m_sceneLabel = nullptr;
-  nanogui::Label *m_triCountLabel = nullptr;
-  nanogui::Window *m_integratorSettingsWindow = nullptr;
-  nanogui::Window *m_guidingSettingsWindow = nullptr;
-  nanogui::Window *m_settingsWindow = nullptr;
-  nanogui::Window *m_mainSettingsWindow = nullptr;
-  nanogui::Slider *m_fovSlider = nullptr;
-  nanogui::Slider *m_focusSlider = nullptr;
-  nanogui::Slider *m_apertureSlider = nullptr;
-  nanogui::ComboBox *m_integratorCombo = nullptr;
-  nanogui::ComboBox *m_lightSamplerCombo = nullptr;
-  int m_maxDepth = 12;
-  int m_rrDepth = 5;
-  int m_integratorMode = futaba::INTEGRATOR_PATH;
-  int m_tonemappingMode = futaba::TONEMAPPING_NONE;
-  int m_pathGuidingMode = futaba::PATH_GUIDING_NONE;
-  int m_lightSamplerType = futaba::LIGHT_SAMPLER_UNIFORM;
-  bool m_useVertexNormals = true;
-  bool m_useAntialiasing = true;
-  bool m_useNEE = true;
-  bool m_useDenoiser = false;
-  futaba::DenoiserManager m_denoiser;
-  futaba::GuidingManager m_guiding;
-  bool m_collectTraining = false;
+    nanogui::Label *m_fpsLabel = nullptr;
+    nanogui::Label *m_sceneLabel = nullptr;
+    nanogui::Label *m_triCountLabel = nullptr;
+    nanogui::Window *m_integratorSettingsWindow = nullptr;
+    nanogui::Window *m_settingsWindow = nullptr;
+    nanogui::Window *m_mainSettingsWindow = nullptr;
+    nanogui::Slider *m_fovSlider = nullptr;
+    nanogui::Slider *m_focusSlider = nullptr;
+    nanogui::Slider *m_apertureSlider = nullptr;
+    nanogui::ComboBox *m_integratorCombo = nullptr;
+    nanogui::ComboBox *m_lightSamplerCombo = nullptr;
+    
+    int m_maxDepth = 12;
+    int m_rrDepth = 5;
+    int m_integratorMode = futaba::INTEGRATOR_PATH;
+    int m_tonemappingMode = futaba::TONEMAPPING_NONE;
+    int m_lightSamplerType = futaba::LIGHT_SAMPLER_POWER;
+    bool m_useVertexNormals = true;
+    bool m_useAntialiasing = true;
+    bool m_useNEE = true;
+    bool m_useDenoiser = false;
+    bool m_trainRequested = false;
 
-  GLuint m_glTex = 0;
-  GLuint m_glPbo = 0;
-  GLuint m_fbo = 0;
-  cudaGraphicsResource_t m_cudaPboResource = nullptr;
+    futaba::DenoiserManager m_denoiser;
+    futaba::GuidingManager m_guiding;
+    futaba::TrainingBufferManager m_trainingBuffers;
 
-  futaba::HDRFilm *m_film = nullptr;
-  futaba::PerspectiveCamera m_camera;
-  futaba::Scene m_scene; // lives here; uploaded once per load
+    GLuint m_glTex = 0;
+    GLuint m_glPbo = 0;
+    GLuint m_fbo = 0;
+    cudaGraphicsResource_t m_cudaPboResource = nullptr;
 
-  // Input state
-  bool m_keys[1024] = {false};
-  bool m_rightMousePressed = false;
+    futaba::HDRFilm *m_film = nullptr;
+    futaba::PerspectiveCamera m_camera;
+    futaba::Scene m_scene;
 
-  // Camera state
-  ::Vector3f m_camPos = ::Vector3f(0.f, 0.f, 2.5f);
-  ::Vector3f m_camForward = ::Vector3f(0.f, 0.f, -1.f);
-  ::Vector3f m_camUp = ::Vector3f(0.f, 1.f, 0.f);
-  float m_moveSpeed = 2.f;
-  float m_currentFov = 39.3077f;
-  float m_currentFocusDistance = 1.f;
-  float m_currentApertureRadius = 0.0f;
+    // Camera state + WASD/mouse-look navigation, shared with no duplicate copy.
+    futaba::CameraController m_cameraController;
 
+    void updateIntegratorUI();
+    void handleException(const std::exception &e, const std::string &title = "Error");
 
+    futaba::TextureManager m_textureManager;
 
-  // Training Buffer Manager
-  futaba::TrainingBufferManager m_trainManager;
-
-  // Visualization resources
-  GLuint m_glTexVis = 0;
-  GLuint m_glPboVis = 0;
-  cudaGraphicsResource_t m_cudaPboResourceVis = nullptr;
-
-  // Visualization GUI widgets and state
-  nanogui::Window *m_visualizationWindow = nullptr;
-  nanogui::ComboBox *m_visCombo = nullptr;
-  nanogui::ImageView *m_visImageView = nullptr;
-  nanogui::IntBox<int> *m_visDepthBox = nullptr;
-  int m_visDepth = 0;
-  int m_visBufferType = 0;
-  bool m_showVisualizer = false;
-
-  void saveTrainingData(const std::string& basePath);
-  void freeTrainingBuffers();
-  void updateVisualizerDropdown();
-  void preprocess();
-  void postprocess();
-  void updateIntegratorUI();
-  void updateGuidingUI();
-  void handleException(const std::exception &e, const std::string &title = "Error");
-
-  futaba::TextureManager m_textureManager;
-
-  // Full-screen loading overlay for background OptiX pipeline compilation
-  nanogui::Window*      m_loadingWindow = nullptr;
-  nanogui::ProgressBar* m_loadingProgressBar = nullptr;
-  nanogui::Label*       m_loadingStatusLabel = nullptr;
+    // Loading splash overlay for background OptiX pipeline compilation
+    nanogui::Window*      m_loadingWindow = nullptr;
+    nanogui::ProgressBar* m_loadingProgressBar = nullptr;
+    nanogui::Label*       m_loadingStatusLabel = nullptr;
+    nanogui::Label*       m_loadingPercentLabel = nullptr;
+    nanogui::Label*       m_loadingSceneLabel = nullptr;
+    float                 m_smoothProgress = 0.0f;
 };

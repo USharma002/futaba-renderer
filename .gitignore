@@ -1,2 +1,4 @@
-build
-scenes
+build/
+scenes/
+*.exr
+ext/tcnn/

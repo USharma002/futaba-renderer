@@ -7,7 +7,7 @@
 
 #include "launch_params.h"
 
-namespace futaba {
+FUTABA_NAMESPACE_BEGIN
     class DenoiserManager;
 
     // Global atomic variables for tracking background OptiX compilation progress
@@ -20,7 +20,7 @@ namespace futaba {
 
     // Explicitly clean up the global OptiX pipeline and related GPU buffers
     void cleanup_pipeline();
-}
+FUTABA_NAMESPACE_END
 
 // CUDA renderer writes directly into the mapped PBO (zero-copy).
 // `scene` must already have triangles/materials uploaded to the GPU.

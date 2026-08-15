@@ -4,7 +4,7 @@
 #include <cuda_runtime.h>
 #include "types.cuh"
 
-namespace futaba {
+FUTABA_NAMESPACE_BEGIN
 
 extern void initOptix();
 extern OptixDeviceContext getOptixContext();
@@ -26,7 +26,8 @@ public:
               Color3f* d_normal_buffer, 
               int sampleCount, 
               uchar4* d_pbo_ptr, 
-              int tonemapping_mode);
+              int tonemapping_mode,
+              cudaStream_t stream = 0);
 
     // Free all allocated OptiX and CUDA memory
     void destroy();
@@ -61,4 +62,4 @@ private:
     float4* m_dOutputBeauty;  // float3 or float4 denoised beauty
 };
 
-} // namespace futaba
+FUTABA_NAMESPACE_END

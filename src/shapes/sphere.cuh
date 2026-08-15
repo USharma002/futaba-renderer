@@ -2,14 +2,14 @@
 #include "common.cuh"
 #include "diffuse.cuh"
 
-namespace futaba {
+FUTABA_NAMESPACE_BEGIN
 
 struct Sphere {
-    float radius; // Radius of the sphere (4 bytes)
-    int material_id = -1; // Material ID (4 bytes)
-    Point3f center; // Center of the sphere (12 bytes)
+    Point3f center = Point3f(0.f); // Center of the sphere (12 bytes)
+    float   radius = 1.f;          // Radius of the sphere (4 bytes)
+    int     material_id = -1;      // Material ID (4 bytes)
     
-    HD bool intersect(const Ray& r, float t_min, float t_max, SurfaceIntersection& rec) const {
+    HD bool intersect(const Ray& r, float t_min, float t_max, SurfaceInteraction& rec) const {
         Vector3f oc = r.o - center;
 
         // Solve the simplified quadratic equation for normalized ray direction:
@@ -44,4 +44,4 @@ struct Sphere {
     }
 };
 
-}
+FUTABA_NAMESPACE_END

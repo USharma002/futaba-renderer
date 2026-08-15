@@ -1,32 +1,37 @@
 #pragma once
 
 #include "types.cuh"
+#include "material.cuh"
 
-// BSDFSample is the primary in/out record for BSDF sampling.
-//
-// Contract:
-//  1. Caller fills `wi` (local-frame incoming direction) and `front_face`
-//     via SurfaceIntersection::prepare_bsdf() before calling any BSDF method.
-//  2. BSDF::sample() fills `wo`, `pdf`, `weight`, `eta`, `sampled_type`.
-//  3. weight encodes  f(wi,wo) * |cos_theta(wo)| / pdf  - multiply path
-//     throughput directly by weight; do NOT apply an extra cosine.
+FUTABA_NAMESPACE_BEGIN
 
-namespace futaba {
-
-struct BSDFSample {
-    Vector3f wo;           // Sampled outgoing direction (local frame)
-    Vector3f wi;           // Incoming direction (local frame) - set by prepare_bsdf()
-    bool     front_face;   // True if the ray hit the front/outside face
-    float    pdf;          // Solid-angle PDF of wo
-    float    eta;          // IOR ratio etaI/etaT; 1 for non-transmissive events
-    int      sampled_type; // BSDFType of the lobe that was actually sampled
-    Color3f  weight;       // f * |cos_theta(wo)| / pdf - apply to path throughput
-
-    HD BSDFSample()
-        : wo(0.f), wi(0.f), front_face(true), pdf(0.f),
-          eta(1.f), sampled_type(BSDF_ID_DIFFUSE), weight(0.f) {}
-
-    HD bool is_valid() const { return pdf > 0.f; }
+enum class TransportMode {
+    Radiance   = 0,
+    Importance = 1
 };
 
-} // namespace futaba
+struct BSDFContext {
+    TransportMode mode = TransportMode::Radiance;
+    HD BSDFContext(TransportMode m = TransportMode::Radiance) : mode(m) {}
+};
+
+struct BSDFSample {
+    Vector3f wo;           // Sampled direction in local shading frame (12 bytes)
+    Vector3f wi;           // Incident direction in local shading frame (12 bytes)
+    Color3f  weight;       // f * |cos_theta(wo)| / pdf throughput weight (12 bytes)
+    float    pdf;          // Solid-angle PDF of wo (4 bytes)
+    float    eta;          // Relative index of refraction (etaI / etaT) (4 bytes)
+    int      sampled_type; // BSDFType of the sampled lobe (4 bytes)
+    bool     front_face;   // True if the ray hit the outside/front face (1 byte)
+    uint8_t  _pad[3] = {0, 0, 0}; // Alignment padding to 4-byte boundary (3 bytes)
+
+    HD BSDFSample()
+        : wo(0.f), wi(0.f), weight(0.f), pdf(0.f),
+          eta(1.f), sampled_type(BSDF_ID_DIFFUSE), front_face(true) {}
+
+    HD bool is_valid() const { return pdf > 0.f && isfinite(pdf); }
+    HD bool is_transmissive() const { return (wo.z * wi.z < 0.f); }
+};
+
+FUTABA_NAMESPACE_END
+

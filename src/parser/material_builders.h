@@ -5,7 +5,7 @@
 #include "proplist.h"
 #include "material.cuh"
 
-namespace futaba {
+FUTABA_NAMESPACE_BEGIN
 
 Material make_diffuse_material(const PropertyList& bsdfProps,
                               const PropertyList& emitterProps = PropertyList());
@@ -39,4 +39,4 @@ Material makeMaterialFromPropertyLists(
 Material makeMaterialFromPropertyLists(const PropertyList& bsdfProps,
                                       const PropertyList& emitterProps);
 
-} // namespace futaba
+FUTABA_NAMESPACE_END

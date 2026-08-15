@@ -2,7 +2,7 @@
 
 #include "common.cuh"
 
-namespace futaba {
+FUTABA_NAMESPACE_BEGIN
 
 struct Frame {
   Vector3f s;
@@ -11,15 +11,20 @@ struct Frame {
 
   HD Frame() : s(1.0f, 0.0f, 0.0f), t(0.0f, 1.0f, 0.0f), n(0.0f, 0.0f, 1.0f) {}
   HD explicit Frame(const Vector3f &normal) { setFromNormal(normal); }
+  HD Frame(const Vector3f &s, const Vector3f &t, const Vector3f &n) : s(s), t(t), n(n) {}
 
-  HD void setFromNormal(const Vector3f &normal) {
-    n = normalize(normal);
+  HD static void coordinate_system(const Vector3f &n, Vector3f &s, Vector3f &t) {
     float sign = (n.z >= 0.0f) ? 1.0f : -1.0f;
     float a = -1.0f / (sign + n.z);
     float b = n.x * n.y * a;
 
     s = Vector3f(1.0f + sign * n.x * n.x * a, sign * b, -sign * n.x);
     t = Vector3f(b, sign + n.y * n.y * a, -n.y);
+  }
+
+  HD void setFromNormal(const Vector3f &normal) {
+    n = normal;
+    coordinate_system(n, s, t);
   }
 
   HD static float cos_theta(const Vector3f &v) { return v.z; }
@@ -36,4 +41,4 @@ struct Frame {
   }
 };
 
-} // namespace futaba
+FUTABA_NAMESPACE_END

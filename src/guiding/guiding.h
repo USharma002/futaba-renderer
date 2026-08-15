@@ -1,4 +1,5 @@
 #pragma once
+
 #include "ppg/stree.h"
 #include "training_buffer.h"
 #include <string>
@@ -10,70 +11,70 @@ namespace nanogui {
     class Widget;
 }
 
-namespace futaba {
+FUTABA_NAMESPACE_BEGIN
 
 struct LaunchParams;
-class HDRFilm;
 
 enum PathGuidingMode {
     PATH_GUIDING_NONE = 0,
-    PATH_GUIDING_PPG = 1, 
-    PATH_GUIDING_NPM = 2      
+    PATH_GUIDING_PPG  = 1,
 };
 
+// A path-guiding algorithm. The distribution is built on the CPU (train) and
+// sampled on the GPU (via GuidingParams filled by updateLaunchParams).
 class GuidingMethod {
 public:
     virtual ~GuidingMethod() = default;
-    virtual std::string getName() const = 0;
-    virtual int getMode() const = 0;
-    virtual void initialize(int width, int height) {}
-    virtual void resize(int width, int height) {}
-    virtual void setSceneBounds(const AABB& bounds) {}
+
+    virtual std::string     name() const = 0;
+    virtual PathGuidingMode mode() const = 0;
+
+    virtual void setSceneBounds(const AABB& /*bounds*/) {}
     virtual void reset() {}
-    virtual void renderUI(nanogui::Widget* parent, std::function<void()> clearFilm, std::function<void()> trainTree) {}
-    virtual void updateLaunchParams(LaunchParams& params) const {}
-    virtual void preprocess() {}
-    virtual void postprocess() {}
-    virtual void train(const TrainingBufferManager& bufferManager, int maxDepth, const HDRFilm* film = nullptr) {}
-    virtual std::vector<std::string> getVisualizerBuffers() const { return {"Active"}; }
+
+    // Build the distribution from one captured training pass.
+    virtual void train(const TrainingBufferManager& /*buffers*/, int /*maxDepth*/) {}
+
+    // Fill params.guiding so the GPU integrator can sample the distribution.
+    virtual void updateLaunchParams(LaunchParams& /*params*/) const {}
+
+    virtual bool isTrainingEnabled() const { return false; }
+    virtual void setTrainingEnabled(bool /*enabled*/) {}
+
+    // Method-specific controls, drawn under the method dropdown.
+    virtual void renderUI(nanogui::Widget* /*parent*/,
+                          std::function<void()> /*clearFilm*/,
+                          std::function<void()> /*requestTrain*/) {}
 };
 
-using GuidingUI = GuidingMethod;
-
-class GuidingRegistry {
-public:
-    static std::vector<std::shared_ptr<GuidingMethod>>& getMethods();
-    static std::shared_ptr<GuidingMethod> getMethod(int mode);
-    static std::vector<std::shared_ptr<GuidingMethod>>& getAlgorithms() { return getMethods(); }
-    static std::shared_ptr<GuidingMethod> getAlgorithm(int mode) { return getMethod(mode); }
-};
-
-#ifndef __CUDACC__
+// Owns the available methods and the current selection. The GUI talks only to
+// this facade; it forwards everything to the active method.
 class GuidingManager {
 public:
     GuidingManager();
-    ~GuidingManager();
 
-    bool init(int width, int height);
-    void resize(int width, int height);
     void setSceneBounds(const AABB& bounds);
     void reset();
-    
-    // Ingests data collected from TrainingBuffers and updates tree statistics
-    void train(const TrainingBufferManager& bufferManager, int maxDepth, const HDRFilm* film = nullptr);
+    void train(const TrainingBufferManager& buffers, int maxDepth);
+    void updateLaunchParams(LaunchParams& params) const;
 
-    void preprocess();
-    void postprocess();
-    void destroy();
+    // The method dropdown is added to `grid` (a 2-column settings grid so it
+    // lines up with the other rows); per-method controls are added to `panel`.
+    void renderUI(nanogui::Widget* grid,
+                  nanogui::Widget* panel,
+                  std::function<void()> clearFilm,
+                  std::function<void()> requestTrain);
 
-    PathGuidingMode getMode() const { return m_mode; }
-    void setMode(PathGuidingMode mode) { m_mode = mode; }
-    
+    PathGuidingMode mode() const { return m_mode; }
+    bool enabled() const { return m_mode != PATH_GUIDING_NONE; }
+    bool isTrainingEnabled() const { return enabled() && active()->isTrainingEnabled(); }
+    void setTrainingEnabled(bool e) { if (enabled()) active()->setTrainingEnabled(e); }
+
 private:
-    PathGuidingMode m_mode;
-    int m_width;
-    int m_height;
-};
-#endif
+    GuidingMethod* active() const;
 
-} // namespace futaba
+    std::vector<std::unique_ptr<GuidingMethod>> m_methods;
+    PathGuidingMode m_mode = PATH_GUIDING_NONE;
+};
+
+FUTABA_NAMESPACE_END

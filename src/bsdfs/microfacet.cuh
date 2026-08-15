@@ -7,7 +7,7 @@
 #include "material.cuh"
 #include "bsdf_sample.cuh"
 
-namespace futaba {
+FUTABA_NAMESPACE_BEGIN
 
 struct Microfacet {
     Color3f kd;
@@ -39,46 +39,20 @@ struct Microfacet {
             kd = Color3f(0.f);
             ks = 1.f;
         } else {
+            // Specular *sampling* probability only (mixture weight between the
+            // cosine-hemisphere and Beckmann sampling strategies). This is a
+            // heuristic, not a physical energy split, so it must never be used
+            // to scale the actual specular reflectance computed in eval() -
+            // doing so would make brighter diffuse materials incorrectly dim
+            // their specular highlight. Floored so the specular lobe stays
+            // reachable via BSDF sampling even for near-white diffuse albedo.
             const float kdMax = fmaxf(kd.x, fmaxf(kd.y, kd.z));
-            ks = 1.f - clamp(kdMax, 0.f, 1.f);
+            ks = clamp(1.f - kdMax, 0.05f, 1.f);
         }
-    }
-
-    HD static float fresnel_conductor_channel(float cosThetaI, float eta, float k) {
-        const float cosI = fmaxf(cosThetaI, 0.f);
-        const float cos2 = cosI * cosI;
-        const float sin2 = fmaxf(0.f, 1.f - cos2);
-
-        const float eta2 = eta * eta;
-        const float k2   = k * k;
-
-        const float t0 = eta2 - k2 - sin2;
-        const float a2pb2 = sqrtf(t0 * t0 + 4.f * eta2 * k2);
-        const float a = sqrtf(fmaxf(0.f, 0.5f * (a2pb2 + t0)));
-
-        const float t1 = a2pb2 + cos2;
-        const float t2 = 2.f * cosI * a;
-        const float Rs = (t1 - t2) / fmaxf(t1 + t2, 1e-8f);
-
-        const float t3 = cos2 * a2pb2 + sin2 * sin2;
-        const float t4 = t2 * sin2;
-        const float Rp = Rs * (t3 - t4) / fmaxf(t3 + t4, 1e-8f);
-
-        return clamp(0.5f * (Rs + Rp), 0.f, 1.f);
     }
 
     HD Color3f fresnel_conductor(float cosThetaI) const {
-        if (eta.x == 0.f && eta.y == 0.f && eta.z == 0.f) {
-            return specularScale;
-        }
-        const float etaScale = fmaxf(extIOR, 1e-6f);
-        const Color3f relEta = eta / etaScale;
-        const Color3f relK   = k   / etaScale;
-        return Color3f(
-            fresnel_conductor_channel(cosThetaI, relEta.x, relK.x),
-            fresnel_conductor_channel(cosThetaI, relEta.y, relK.y),
-            fresnel_conductor_channel(cosThetaI, relEta.z, relK.z)
-        ) * specularScale;
+        return fresnelConductor(cosThetaI, eta, k, extIOR, specularScale);
     }
 
     HD Color3f eval(const BSDFSample& bs) const {
@@ -90,7 +64,7 @@ struct Microfacet {
         Color3f result = kd * INV_PI;
 
         const Vector3f hsum = bs.wi + bs.wo;
-        if (hsum.lengthSquared() <= 1e-12f || ks <= 0.f)
+        if (hsum.lengthSquared() <= 1e-12f)
             return result;
 
         const Vector3f wh = normalize(hsum);
@@ -100,7 +74,10 @@ struct Microfacet {
 
         const float cosWhWi = dot(wh, bs.wi);
         const float G = Warp::smithBeckmannG1(bs.wi, wh, alpha) * Warp::smithBeckmannG1(bs.wo, wh, alpha);
-        const float common = ks * D * G / fmaxf(4.f * cosThetaI * cosThetaO, 1e-8f);
+        // NOTE: no `ks` factor here - ks is a sampling-strategy mixture weight
+        // (see constructor), not a physical reflectance scale. The specular
+        // lobe's true magnitude is D * G * F / (4 cosI cosO) regardless of it.
+        const float common = D * G / fmaxf(4.f * cosThetaI * cosThetaO, 1e-8f);
 
         if (isConductor) {
             const Color3f F = fresnel_conductor(cosWhWi);
@@ -133,6 +110,47 @@ struct Microfacet {
         }
 
         return diffusePdf + specPdf;
+    }
+
+    HD void eval_pdf(const BSDFSample& bs, Color3f& f_out, float& pdf_out) const {
+        const float cosThetaI = Frame::cos_theta(bs.wi);
+        const float cosThetaO = Frame::cos_theta(bs.wo);
+        if (cosThetaI <= 0.f || cosThetaO <= 0.f) {
+            f_out   = Color3f(0.f);
+            pdf_out = 0.f;
+            return;
+        }
+
+        f_out = kd * INV_PI;
+        pdf_out = (1.f - ks) * (cosThetaO * INV_PI);
+
+        const Vector3f hsum = bs.wi + bs.wo;
+        if (hsum.lengthSquared() > 1e-12f) {
+            const Vector3f wh = normalize(hsum);
+            const float D = Warp::beckmannD(wh, alpha);
+            const float cosThetaH = Frame::cos_theta(wh);
+            const float woDotWh = dot(bs.wo, wh);
+
+            if (D > 0.f && cosThetaH > 0.f && woDotWh > 0.f) {
+                const float cosWhWi = dot(wh, bs.wi);
+                const float G = Warp::smithBeckmannG1(bs.wi, wh, alpha) * Warp::smithBeckmannG1(bs.wo, wh, alpha);
+                const float common = D * G / fmaxf(4.f * cosThetaI * cosThetaO, 1e-8f);
+
+                if (isConductor) {
+                    const Color3f F = fresnel_conductor(cosWhWi);
+                    f_out += F * common;
+                } else {
+                    const float F = fresnel(cosWhWi, extIOR, intIOR);
+                    f_out += Color3f(common * F);
+                }
+
+                if (ks > 0.f) {
+                    const float pWh = D * cosThetaH;
+                    const float jacobian = 1.f / fmaxf(4.f * woDotWh, 1e-8f);
+                    pdf_out += ks * pWh * jacobian;
+                }
+            }
+        }
     }
 
     HD Color3f sample(BSDFSample& bs, const Point2f& s2) const {
@@ -168,17 +186,18 @@ struct Microfacet {
             bs.wo = Warp::squareToCosineHemisphere(Point2f(uRemap, s2.y));
         }
 
-        bs.pdf = pdf(bs);
+        Color3f f;
+        eval_pdf(bs, f, bs.pdf);
         if (bs.pdf <= 0.f) {
             bs.weight = Color3f(0.f);
             return Color3f(0.f);
         }
 
-        bs.weight = eval(bs) * (Frame::cos_theta(bs.wo) / bs.pdf);
+        bs.weight       = f * (Frame::cos_theta(bs.wo) / bs.pdf);
         bs.eta          = 1.f;
         bs.sampled_type = BSDF_ID_MICROFACET;
         return bs.weight;
     }
 };
 
-} // namespace futaba
+FUTABA_NAMESPACE_END

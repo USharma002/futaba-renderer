@@ -6,7 +6,7 @@
 #include <nanogui/nanogui.h>
 #include "launch_params.h"
 
-namespace futaba {
+FUTABA_NAMESPACE_BEGIN
 
 class IntegratorUI {
 public:
@@ -18,10 +18,20 @@ public:
     virtual void updateLaunchParams(LaunchParams& params) const {}
 };
 
+class SimpleIntegratorUI : public IntegratorUI {
+public:
+    SimpleIntegratorUI(std::string name, int mode) : m_name(std::move(name)), m_mode(mode) {}
+    std::string getName() const override { return m_name; }
+    int getMode() const override { return m_mode; }
+private:
+    std::string m_name;
+    int m_mode;
+};
+
 class IntegratorRegistry {
 public:
     static std::vector<std::shared_ptr<IntegratorUI>>& getIntegrators();
     static std::shared_ptr<IntegratorUI> getIntegrator(int mode);
 };
 
-} // namespace futaba
+FUTABA_NAMESPACE_END

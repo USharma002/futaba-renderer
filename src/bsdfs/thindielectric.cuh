@@ -6,29 +6,35 @@
 #include "bsdf_sample.cuh"
 #include "material.cuh"
 
-namespace futaba {
+FUTABA_NAMESPACE_BEGIN
 
 struct ThinDielectric {
     Color3f albedo;
+    float   extIOR;
     float   intIOR;
 
-    HD ThinDielectric() : albedo(1.f), intIOR(1.5f) {}
-    HD ThinDielectric(const Color3f& tint, float ior) : albedo(tint), intIOR(ior) {}
+    HD ThinDielectric() : albedo(1.f), extIOR(1.000277f), intIOR(1.5f) {}
+    HD explicit ThinDielectric(const Color3f& tint, float int_ior = 1.5f, float ext_ior = 1.000277f)
+        : albedo(tint), extIOR(ext_ior), intIOR(int_ior) {}
 
+    // Dirac Delta BSDF: continuous eval and pdf are 0
     HD Color3f eval(const BSDFSample& /*bs*/) const { return Color3f(0.f); }
     HD float   pdf (const BSDFSample& /*bs*/) const { return 0.f; }
 
-    HD Color3f sample(BSDFSample& bs, const Point2f& s2) const {
-        float etaI = bs.front_face ? 1.f : intIOR;
-        float etaT = bs.front_face ? intIOR : 1.f;
-        float cosI = Frame::cos_theta(bs.wi);
-        float Fr   = fresnel(cosI, etaI, etaT);
+    HD void eval_pdf(const BSDFSample& /*bs*/, Color3f& f_out, float& pdf_out) const {
+        f_out   = Color3f(0.f);
+        pdf_out = 0.f;
+    }
 
-        // Account for internal reflections inside the thin slab
-        Fr *= 2.f / (1.f + Fr);
+    HD Color3f sample(BSDFSample& bs, const Point2f& u) const {
+        float cosI = fabsf(Frame::cos_theta(bs.wi));
+        float Fr   = fresnel(cosI, extIOR, intIOR);
 
-        // Reflect
-        if (s2.x < Fr) {
+        // Account for internal bounces in a thin slab: Fr_thin = 2 Fr / (1 + Fr)
+        Fr = (Fr < 1.f) ? (2.f * Fr / (1.f + Fr)) : 1.f;
+
+        if (u.x < Fr) {
+            // Reflect
             bs.wo           = Vector3f(-bs.wi.x, -bs.wi.y, bs.wi.z);
             bs.pdf          = fmaxf(Fr, 1e-6f);
             bs.weight       = albedo;
@@ -37,7 +43,7 @@ struct ThinDielectric {
             return bs.weight;
         }
 
-        // Transmit (straight through without bending)
+        // Transmit without deviation
         bs.wo           = -bs.wi;
         bs.pdf          = fmaxf(1.f - Fr, 1e-6f);
         bs.weight       = albedo;
@@ -47,4 +53,5 @@ struct ThinDielectric {
     }
 };
 
-} // namespace futaba
+FUTABA_NAMESPACE_END
+

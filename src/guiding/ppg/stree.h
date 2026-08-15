@@ -9,7 +9,7 @@
 #include <vector>
 
 #include "ppg/dtree.cuh"
-#include "bvh.cuh"
+#include "bbox.cuh"
 
 enum class ESpatialFilter {
     ENearest,
@@ -129,9 +129,9 @@ struct STree {
 
     explicit __host__ STree(const AABB& aabb) : m_nodes(nullptr), m_numNodes(0) {
         m_aabb = aabb;
-        Vector3f size = m_aabb.maxP - m_aabb.minP;
+        Vector3f size = m_aabb.max - m_aabb.min;
         float maxSize = std::max({size.x, size.y, size.z});
-        m_aabb.maxP = Point3f(m_aabb.minP.x + maxSize, m_aabb.minP.y + maxSize, m_aabb.minP.z + maxSize);
+        m_aabb.max = Point3f(m_aabb.min.x + maxSize, m_aabb.min.y + maxSize, m_aabb.min.z + maxSize);
         initialize();
     }
 
@@ -170,10 +170,10 @@ struct STree {
 #endif
 
     inline __host__ __device__ DTreeWrapper* dTreeWrapper(Point3f p, Vector3f& size) {
-        size = Vector3f(m_aabb.maxP.x - m_aabb.minP.x, m_aabb.maxP.y - m_aabb.minP.y, m_aabb.maxP.z - m_aabb.minP.z);
-        p.x = (p.x - m_aabb.minP.x) / size.x;
-        p.y = (p.y - m_aabb.minP.y) / size.y;
-        p.z = (p.z - m_aabb.minP.z) / size.z;
+        size = Vector3f(m_aabb.max.x - m_aabb.min.x, m_aabb.max.y - m_aabb.min.y, m_aabb.max.z - m_aabb.min.z);
+        p.x = (p.x - m_aabb.min.x) / size.x;
+        p.y = (p.y - m_aabb.min.y) / size.y;
+        p.z = (p.z - m_aabb.min.z) / size.z;
         return m_nodes[0].dTreeWrapper(p, size, m_nodes);
     }
 
@@ -190,13 +190,13 @@ struct STree {
         if (volume <= 0.f) return;
         rec.statisticalWeight /= volume;
 
-        Vector3f extents(m_aabb.maxP.x - m_aabb.minP.x, m_aabb.maxP.y - m_aabb.minP.y, m_aabb.maxP.z - m_aabb.minP.z);
+        Vector3f extents(m_aabb.max.x - m_aabb.min.x, m_aabb.max.y - m_aabb.min.y, m_aabb.max.z - m_aabb.min.z);
         Point3f half(dTreeVoxelSize.x * 0.5f, dTreeVoxelSize.y * 0.5f, dTreeVoxelSize.z * 0.5f);
 
         m_nodes[0].record(
             Point3f(p.x - half.x, p.y - half.y, p.z - half.z),
             Point3f(p.x + half.x, p.y + half.y, p.z + half.z),
-            m_aabb.minP, extents, rec, dirFilter, m_nodes);
+            m_aabb.min, extents, rec, dirFilter, m_nodes);
     }
 #endif
 
@@ -210,8 +210,8 @@ struct STree {
     __host__ void forEachDTreeWrapperConstP(std::function<void(const DTreeWrapper*, const Point3f&, const Vector3f&)> func) const {
         std::vector<STreeNode> hostNodes(m_numNodes);
         if (m_numNodes > 0 && m_nodes != nullptr) { cudaMemcpy(hostNodes.data(), m_nodes, m_numNodes * sizeof(STreeNode), cudaMemcpyDeviceToHost); }
-        Vector3f size(m_aabb.maxP.x - m_aabb.minP.x, m_aabb.maxP.y - m_aabb.minP.y, m_aabb.maxP.z - m_aabb.minP.z);
-        if (!hostNodes.empty()) { hostNodes[0].forEachLeaf(func, m_aabb.minP, size, hostNodes.data()); }
+        Vector3f size(m_aabb.max.x - m_aabb.min.x, m_aabb.max.y - m_aabb.min.y, m_aabb.max.z - m_aabb.min.z);
+        if (!hostNodes.empty()) { hostNodes[0].forEachLeaf(func, m_aabb.min, size, hostNodes.data()); }
     }
 
     __host__ void forEachDTreeWrapper(std::function<void(DTreeWrapper*)> func) {

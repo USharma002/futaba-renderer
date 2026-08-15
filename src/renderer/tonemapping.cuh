@@ -3,7 +3,8 @@
 #include "types.cuh"
 #include "launch_params.h"
 
-namespace futaba {
+FUTABA_NAMESPACE_BEGIN
+
 namespace tonemap {
 
 // No tone mapping, just return linear
@@ -53,6 +54,8 @@ HD Color3f filmic_uncharted2(const Color3f& x) {
     return result;
 }
 
+#include "common.cuh"
+
 // Apply tone mapping based on mode
 HD Color3f apply(const Color3f& linear, int mode) {
     switch (mode) {
@@ -68,5 +71,17 @@ HD Color3f apply(const Color3f& linear, int mode) {
     }
 }
 
+// Convert linear radiance to tonemapped sRGB 8-bit RGBA pixel
+HD uchar4 pack_to_uchar4(const Color3f& linear_color, int tonemapping_mode) {
+    Color3f final_color = toSRGB(apply(linear_color, tonemapping_mode));
+    return make_uchar4(
+        (unsigned char)clamp(final_color.x * 255.f, 0.f, 255.f),
+        (unsigned char)clamp(final_color.y * 255.f, 0.f, 255.f),
+        (unsigned char)clamp(final_color.z * 255.f, 0.f, 255.f),
+        255
+    );
+}
+
 } // namespace tonemap
-} // namespace futaba
+
+FUTABA_NAMESPACE_END

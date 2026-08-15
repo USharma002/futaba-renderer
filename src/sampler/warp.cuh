@@ -5,9 +5,20 @@
 #include "frame.cuh"
 #include <cmath>
 
+FUTABA_NAMESPACE_BEGIN
+
 // Warp functions for importance sampling
 // All points have [0, 1]^d uniform samples
 struct Warp {
+
+    HD static void fast_sincos(float angle, float* s, float* c) {
+#ifdef __CUDA_ARCH__
+        sincosf(angle, s, c);
+#else
+        *s = std::sin(angle);
+        *c = std::cos(angle);
+#endif
+    }
 
     HD static Point2f squareToUniformSquare(const Point2f &sample2){
         return sample2;
@@ -24,11 +35,13 @@ struct Warp {
     HD static Vector3f squareToUniformSphere(const Point2f& sample2){
         float phi = 2.0f * M_PI * sample2.x;
         float cos_theta = 1.0f - 2.0f * sample2.y;
-        float sin_theta = sqrtf(1.0f - cos_theta * cos_theta);
+        float sin_theta = sqrtf(fmaxf(0.0f, 1.0f - cos_theta * cos_theta));
+        float sin_phi, cos_phi;
+        fast_sincos(phi, &sin_phi, &cos_phi);
         
         return Vector3f(
-            sin_theta * cosf(phi),
-            sin_theta * sinf(phi),
+            sin_theta * cos_phi,
+            sin_theta * sin_phi,
             cos_theta
         );
     }
@@ -41,11 +54,13 @@ struct Warp {
     HD static Vector3f squareToUniformHemisphere(const Point2f& sample2) {
         float phi = 2.0f * M_PI * sample2.x;
         float cos_theta = 1.0f - sample2.y;
-        float sin_theta = sqrtf(sample2.y * (2.0f - sample2.y));
+        float sin_theta = sqrtf(fmaxf(0.0f, sample2.y * (2.0f - sample2.y)));
+        float sin_phi, cos_phi;
+        fast_sincos(phi, &sin_phi, &cos_phi);
         
         return Vector3f(
-            sin_theta * cosf(phi),
-            sin_theta * sinf(phi),
+            sin_theta * cos_phi,
+            sin_theta * sin_phi,
             cos_theta
         );
     }
@@ -60,11 +75,13 @@ struct Warp {
     HD static Vector3f squareToCosineHemisphere(const Point2f& sample2) {
         float phi = 2.0f * M_PI * sample2.x;
         float cos_theta = sqrtf(sample2.y);
-        float sin_theta = sqrtf(1.0f - sample2.y);
+        float sin_theta = sqrtf(fmaxf(0.0f, 1.0f - sample2.y));
+        float sin_phi, cos_phi;
+        fast_sincos(phi, &sin_phi, &cos_phi);
         
         return Vector3f(
-            sin_theta * cosf(phi),
-            sin_theta * sinf(phi),
+            sin_theta * cos_phi,
+            sin_theta * sin_phi,
             cos_theta
         );
     }
@@ -94,12 +111,14 @@ struct Warp {
             theta = (M_PI / 2.0f) - (M_PI / 4.0f) * (a / b);
         }
 
-        return Point2f(r * cosf(theta), r * sinf(theta));
+        float sin_t, cos_t;
+        fast_sincos(theta, &sin_t, &cos_t);
+        return Point2f(r * cos_t, r * sin_t);
     }
 
     // Beckmann normal distribution function D(wh).
     HD static float beckmannD(const Vector3f& wh, float alpha) {
-        const float cosThetaH = futaba::Frame::cos_theta(wh);
+        const float cosThetaH = Frame::cos_theta(wh);
         if (cosThetaH <= 0.f)
             return 0.f;
 
@@ -113,7 +132,7 @@ struct Warp {
 
     // PDF of sampling a microfacet normal wh from Beckmann: p(wh) = D(wh) * cos(theta_h).
     HD static float squareToBeckmannPdf(const Vector3f& wh, float alpha) {
-        const float cosThetaH = futaba::Frame::cos_theta(wh);
+        const float cosThetaH = Frame::cos_theta(wh);
         if (cosThetaH <= 0.f)
             return 0.f;
         return beckmannD(wh, alpha) * cosThetaH;
@@ -130,17 +149,19 @@ struct Warp {
         const float tan2Theta = -a * a * logf(fmaxf(1.f - u, 1e-7f));
         const float cosTheta = 1.f / sqrtf(1.f + tan2Theta);
         const float sinTheta = sqrtf(fmaxf(0.f, 1.f - cosTheta * cosTheta));
+        float sin_phi, cos_phi;
+        fast_sincos(phi, &sin_phi, &cos_phi);
 
         return Vector3f(
-            sinTheta * cosf(phi),
-            sinTheta * sinf(phi),
+            sinTheta * cos_phi,
+            sinTheta * sin_phi,
             cosTheta
         );
     }
 
     // Smith G1 masking term approximation for Beckmann roughness.
     HD static float smithBeckmannG1(const Vector3f& v, const Vector3f& wh, float alpha) {
-        const float cosThetaV = futaba::Frame::cos_theta(v);
+        const float cosThetaV = Frame::cos_theta(v);
         if (cosThetaV <= 0.f)
             return 0.f;
 
@@ -165,4 +186,12 @@ struct Warp {
         return (3.535f * b + 2.181f * b2) / (1.f + 2.276f * b + 2.577f * b2);
     }
 
+    // Map uniform square [0,1]^2 to barycentric coordinates on a triangle
+    HD static Point2f squareToUniformTriangle(const Point2f& sample2) {
+        float sqrt_u = sqrtf(sample2.x);
+        return Point2f(1.0f - sqrt_u, sample2.y * sqrt_u);
+    }
+
 };
+
+FUTABA_NAMESPACE_END

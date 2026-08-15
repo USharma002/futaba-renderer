@@ -7,7 +7,7 @@
 
 #include "types.cuh"
 
-namespace futaba {
+FUTABA_NAMESPACE_BEGIN
 
 HD void sample1D_device(const float* cdf, int n, float funcSum, float u, int &index, float &du, float &pdf);
 
@@ -100,4 +100,4 @@ HD void sample2D_device(const float* condCdfs, int nu, int nv, const float* rowS
     pdf = pdf_v * pdf_u;
 }
 
-} // namespace futaba
+FUTABA_NAMESPACE_END

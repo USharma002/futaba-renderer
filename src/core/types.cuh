@@ -8,6 +8,9 @@
 #pragma warning(disable: 4141)
 #endif
 
+#define FUTABA_NAMESPACE_BEGIN namespace futaba {
+#define FUTABA_NAMESPACE_END }
+
 
 // -----------------------------------------------------------------------------
 // MACROS & UTILS
@@ -27,6 +30,7 @@
     #define FAST_MIN(a, b) std::min(a, b)
 #endif
 
+FUTABA_NAMESPACE_BEGIN
 // -----------------------------------------------------------------------------
 // TEMPLATED VECTOR & POINT CLASSES
 // -----------------------------------------------------------------------------
@@ -115,6 +119,12 @@ struct Vector3 {
     HD T lengthSquared() const { return x*x + y*y + z*z; }
     HD T length() const { return std::sqrt(lengthSquared()); }
     
+    HD bool isZero() const { return x == 0 && y == 0 && z == 0; }
+    HD bool isPositive() const { return x > 0 && y > 0 && z > 0; }
+    HD bool hasPositiveComponent() const { return x > 0 || y > 0 || z > 0; }
+    HD T maxComponent() const { return fmaxf(x, fmaxf(y, z)); }
+    HD T minComponent() const { return fminf(x, fminf(y, z)); }
+
     HD T& operator[](int i) { return (&x)[i]; }
     HD const T& operator[](int i) const { return (&x)[i]; }
 };
@@ -298,4 +308,39 @@ struct Matrix4f {
         m.m[2][2] = a.z * a.z + (1.0f - a.z * a.z) * c;
         return m;
     }
+
+    // LookAt Matrix (Camera / Sensor / Emitter orientation)
+    static HD Matrix4f lookAt(const Point3f& origin, const Point3f& target, const Vector3f& up) {
+        Vector3f dir = normalize(target - origin);
+        Vector3f left = normalize(cross(normalize(up), dir));
+        Vector3f newUp = cross(dir, left);
+        Matrix4f m;
+        m.m[0][0] = left.x;  m.m[0][1] = newUp.x;  m.m[0][2] = dir.x;  m.m[0][3] = origin.x;
+        m.m[1][0] = left.y;  m.m[1][1] = newUp.y;  m.m[1][2] = dir.y;  m.m[1][3] = origin.y;
+        m.m[2][0] = left.z;  m.m[2][1] = newUp.z;  m.m[2][2] = dir.z;  m.m[2][3] = origin.z;
+        m.m[3][0] = 0.f;     m.m[3][1] = 0.f;      m.m[3][2] = 0.f;    m.m[3][3] = 1.f;
+        return m;
+    }
+
+    // Inverse transpose of upper 3x3 (for normal transformations)
+    static HD Matrix4f inverseTransposeUpper3x3(const Matrix4f& m) {
+        const float a = m.m[0][0], b = m.m[0][1], c = m.m[0][2];
+        const float d = m.m[1][0], e = m.m[1][1], f = m.m[1][2];
+        const float g = m.m[2][0], h = m.m[2][1], i = m.m[2][2];
+
+        const float A = e * i - f * h;
+        const float B = -(d * i - f * g);
+        const float C = d * h - e * g;
+        const float det = a * A + b * B + c * C;
+        if (fabsf(det) <= 1e-12f) return Matrix4f();
+
+        const float invDet = 1.f / det;
+        Matrix4f n;
+        n.m[0][0] = A * invDet;               n.m[0][1] = B * invDet;               n.m[0][2] = C * invDet;
+        n.m[1][0] = -(b * i - c * h) * invDet; n.m[1][1] = (a * i - c * g) * invDet; n.m[1][2] = -(a * h - b * g) * invDet;
+        n.m[2][0] = (b * f - c * e) * invDet;  n.m[2][1] = -(a * f - c * d) * invDet; n.m[2][2] = (a * e - b * d) * invDet;
+        return n;
+    }
 };
+
+FUTABA_NAMESPACE_END

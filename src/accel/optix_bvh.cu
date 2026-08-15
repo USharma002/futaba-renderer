@@ -5,30 +5,10 @@
 #include <vector>
 #include <cstdio>
 #include <cuda_runtime.h>
+#include "common.cuh"
+#include "optix_check.h"
 
-namespace futaba {
-
-// ---------------------------------------------------------------------------
-// Internal helpers
-// ---------------------------------------------------------------------------
-
-#define CUDA_CHECK_BVH(call)                                                   \
-    do {                                                                       \
-        const cudaError_t _e = (call);                                         \
-        if (_e != cudaSuccess) {                                               \
-            fprintf(stderr, "[optix_bvh] CUDA error %s:%d  %s\n",             \
-                    __FILE__, __LINE__, cudaGetErrorString(_e));               \
-        }                                                                      \
-    } while (0)
-
-#define OPTIX_CHECK(call)                                                      \
-    do {                                                                       \
-        const OptixResult _r = (call);                                         \
-        if (_r != OPTIX_SUCCESS) {                                             \
-            fprintf(stderr, "[optix_bvh] OptiX error %s:%d  code=%d\n",       \
-                    __FILE__, __LINE__, (int)_r);                               \
-        }                                                                      \
-    } while (0)
+FUTABA_NAMESPACE_BEGIN
 
 // ---------------------------------------------------------------------------
 // Global OptiX context (initialised once per process)
@@ -44,7 +24,7 @@ void initOptix() {
     if (g_optixContext) return;
 
     // Ensure a CUDA context exists.
-    CUDA_CHECK_BVH(cudaFree(nullptr));
+    CUDA_CHECK(cudaFree(nullptr));
 
     OPTIX_CHECK(optixInit());
 
@@ -99,12 +79,12 @@ void buildOptixBVH(BVH& bvh, const Triangle* hostTriangles, uint32_t triangleCou
     const size_t vertexBytes = vertexCount    * sizeof(float3);
     const size_t indexBytes  = triangleCount  * sizeof(uint3);
 
-    CUDA_CHECK_BVH(cudaMalloc(reinterpret_cast<void**>(&d_vertices), vertexBytes));
-    CUDA_CHECK_BVH(cudaMemcpy(reinterpret_cast<void*>(d_vertices),
+    CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&d_vertices), vertexBytes));
+    CUDA_CHECK(cudaMemcpy(reinterpret_cast<void*>(d_vertices),
                                vertices.data(), vertexBytes, cudaMemcpyHostToDevice));
 
-    CUDA_CHECK_BVH(cudaMalloc(reinterpret_cast<void**>(&d_indices), indexBytes));
-    CUDA_CHECK_BVH(cudaMemcpy(reinterpret_cast<void*>(d_indices),
+    CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&d_indices), indexBytes));
+    CUDA_CHECK(cudaMemcpy(reinterpret_cast<void*>(d_indices),
                                indices.data(), indexBytes, cudaMemcpyHostToDevice));
 
     // Describe the triangle geometry to OptiX.
@@ -134,9 +114,9 @@ void buildOptixBVH(BVH& bvh, const Triangle* hostTriangles, uint32_t triangleCou
         g_optixContext, &accelOptions, &buildInput, 1, &bufferSizes));
 
     CUdeviceptr d_tempBuffer = 0;
-    CUDA_CHECK_BVH(cudaMalloc(reinterpret_cast<void**>(&d_tempBuffer),
+    CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&d_tempBuffer),
                                bufferSizes.tempSizeInBytes));
-    CUDA_CHECK_BVH(cudaMalloc(reinterpret_cast<void**>(&bvh.accelBuffer),
+    CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&bvh.accelBuffer),
                                bufferSizes.outputSizeInBytes));
 
     OPTIX_CHECK(optixAccelBuild(
@@ -151,20 +131,20 @@ void buildOptixBVH(BVH& bvh, const Triangle* hostTriangles, uint32_t triangleCou
         nullptr, 0                 // emitted properties (none)
     ));
 
-    CUDA_CHECK_BVH(cudaDeviceSynchronize());
+    CUDA_CHECK(cudaDeviceSynchronize());
 
     // Temporary buffers are no longer needed after the build.
-    CUDA_CHECK_BVH(cudaFree(reinterpret_cast<void*>(d_tempBuffer)));
-    CUDA_CHECK_BVH(cudaFree(reinterpret_cast<void*>(d_indices)));
-    CUDA_CHECK_BVH(cudaFree(reinterpret_cast<void*>(d_vertices)));
+    CUDA_CHECK(cudaFree(reinterpret_cast<void*>(d_tempBuffer)));
+    CUDA_CHECK(cudaFree(reinterpret_cast<void*>(d_indices)));
+    CUDA_CHECK(cudaFree(reinterpret_cast<void*>(d_vertices)));
 }
 
 void clearOptixBVH(BVH& bvh) {
     if (bvh.accelBuffer) {
-        CUDA_CHECK_BVH(cudaFree(reinterpret_cast<void*>(bvh.accelBuffer)));
+        CUDA_CHECK(cudaFree(reinterpret_cast<void*>(bvh.accelBuffer)));
         bvh.accelBuffer = 0;
     }
     bvh.traversable = 0;
 }
 
-} // namespace futaba
+FUTABA_NAMESPACE_END

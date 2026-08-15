@@ -6,6 +6,7 @@
 #include <numeric>
 
 #include "types.cuh"
+#include "bbox.cuh"
 #include "ray.cuh"
 #include "triangle.cuh"
 #include "surface_interaction.cuh"
@@ -18,7 +19,7 @@
 // the path tracer and heatmap are evaluating the exact same AABBs.
 #define FUTABA_USE_OPTIX 1
 
-namespace futaba {
+FUTABA_NAMESPACE_BEGIN
 
 constexpr int kMaxTraversalStackSize = 64;
 
@@ -39,74 +40,6 @@ HD T* unpackPointer(unsigned int i0, unsigned int i1) {
     return reinterpret_cast<T*>(packed);
 }
 
-struct AABB {
-    Point3f minP;
-    Point3f maxP;
-
-    HD AABB()
-        : minP(1e30f),
-          maxP(-1e30f) {}
-
-    HD void expand(const Point3f& p) {
-        minP.x = minP.x < p.x ? minP.x : p.x;
-        minP.y = minP.y < p.y ? minP.y : p.y;
-        minP.z = minP.z < p.z ? minP.z : p.z;
-        maxP.x = maxP.x > p.x ? maxP.x : p.x;
-        maxP.y = maxP.y > p.y ? maxP.y : p.y;
-        maxP.z = maxP.z > p.z ? maxP.z : p.z;
-    }
-
-    HD void expand(const AABB& b) {
-        expand(b.minP);
-        expand(b.maxP);
-    }
-
-    HD Vector3f extent() const {
-        return maxP - minP;
-    }
-
-    HD Point3f centroid() const {
-        return Point3f(0.5f * (minP.x + maxP.x),
-                       0.5f * (minP.y + maxP.y),
-                       0.5f * (minP.z + maxP.z));
-    }
-
-    // Ray-AABB intersection test. Safely handles NaNs.
-    HD bool intersectDist(const Ray& ray, float tMin, float tMax, float& dist) const {
-        float tx1 = (minP.x - ray.o.x) * ray.dRcp.x;
-        float tx2 = (maxP.x - ray.o.x) * ray.dRcp.x;
-        float tNear = tx1 < tx2 ? tx1 : tx2;
-        float tFar = tx1 > tx2 ? tx1 : tx2;
-        tMin = tNear > tMin ? tNear : tMin;
-        tMax = tFar < tMax ? tFar : tMax;
-
-        float ty1 = (minP.y - ray.o.y) * ray.dRcp.y;
-        float ty2 = (maxP.y - ray.o.y) * ray.dRcp.y;
-        tNear = ty1 < ty2 ? ty1 : ty2;
-        tFar = ty1 > ty2 ? ty1 : ty2;
-        tMin = tNear > tMin ? tNear : tMin;
-        tMax = tFar < tMax ? tFar : tMax;
-
-        float tz1 = (minP.z - ray.o.z) * ray.dRcp.z;
-        float tz2 = (maxP.z - ray.o.z) * ray.dRcp.z;
-        tNear = tz1 < tz2 ? tz1 : tz2;
-        tFar = tz1 > tz2 ? tz1 : tz2;
-        tMin = tNear > tMin ? tNear : tMin;
-        tMax = tFar < tMax ? tFar : tMax;
-
-        if (tMax >= tMin) {
-            dist = tMin;
-            return true;
-        }
-        return false;
-    }
-
-    HD bool intersect(const Ray& ray, float tMin, float tMax) const {
-        float dist;
-        return intersectDist(ray, tMin, tMax, dist);
-    }
-};
-
 struct alignas(32) BVHNode {
     AABB bounds;
     int leftFirst = -1;
@@ -125,19 +58,7 @@ struct BVH {
     OptixTraversableHandle traversable = 0;
     CUdeviceptr accelBuffer = 0;
 
-    static AABB triangleBounds(const Triangle& t) {
-        AABB b;
-        b.expand(t.p0);
-        b.expand(t.p1);
-        b.expand(t.p2);
-        return b;
-    }
 
-    static Point3f triangleCentroid(const Triangle& t) {
-        return Point3f((t.p0.x + t.p1.x + t.p2.x) / 3.0f,
-                       (t.p0.y + t.p1.y + t.p2.y) / 3.0f,
-                       (t.p0.z + t.p1.z + t.p2.z) / 3.0f);
-    }
 
     void clear() {
         if (nodes != nullptr) {
@@ -177,8 +98,8 @@ struct BVH {
             AABB centroidBounds;
             for (int i = start; i < start + count; ++i) {
                 const Triangle& tri = hostTriangles[hostIndices[i]];
-                bounds.expand(triangleBounds(tri));
-                centroidBounds.expand(triangleCentroid(tri));
+                bounds.expand(tri.bounds());
+                centroidBounds.expand(tri.centroid());
             }
             
             // Assigning by array index is perfectly memory safe
@@ -203,7 +124,7 @@ struct BVH {
             auto midIt = std::partition(hostIndices.begin() + start,
                                         hostIndices.begin() + start + count,
                                         [&](int triIdx) {
-                                            Point3f c = triangleCentroid(hostTriangles[triIdx]);
+                                            Point3f c = hostTriangles[triIdx].centroid();
                                             return c[axis] < splitPos;
                                         });
 
@@ -214,8 +135,8 @@ struct BVH {
                 std::nth_element(hostIndices.begin() + start,
                                  hostIndices.begin() + start + leftCount,
                                  hostIndices.begin() + start + count,[&](int a, int b) {
-                                     Point3f ca = triangleCentroid(hostTriangles[a]);
-                                     Point3f cb = triangleCentroid(hostTriangles[b]);
+                                     Point3f ca = hostTriangles[a].centroid();
+                                     Point3f cb = hostTriangles[b].centroid();
                                      return ca[axis] < cb[axis];
                                  });
             }
@@ -253,7 +174,7 @@ struct BVH {
                       float tMin,
                       float tMax,
                       const Triangle* __restrict__ triangles, // __restrict__ uses fast L1 texture cache
-                      SurfaceIntersection& rec,
+                      SurfaceInteraction& rec,
                       bool use_vertex_normals) const {
 #if defined(FUTABA_OPTIX_DEVICE_PROGRAMS) && FUTABA_USE_OPTIX
         if (traversable == 0) {
@@ -287,6 +208,7 @@ struct BVH {
             return false;
         }
 
+        Vector3f dRcp(1.0f / ray.d.x, 1.0f / ray.d.y, 1.0f / ray.d.z);
         bool hit = false;
         float closest = tMax;
 
@@ -294,7 +216,7 @@ struct BVH {
         int stackSize = 0;
 
         float dummyDist;
-        if (!bvhNodes[0].bounds.intersectDist(ray, tMin, closest, dummyDist)) {
+        if (!bvhNodes[0].bounds.intersectDist(ray, dRcp, tMin, closest, dummyDist)) {
             return false;
         }
 
@@ -309,7 +231,7 @@ struct BVH {
             if (node.isLeaf()) {
                 for (int i = 0; i < node.triCount; ++i) {
                     int triIdx = bvhTriIndices[node.leftFirst + i];
-                    SurfaceIntersection tmp;
+                    SurfaceInteraction tmp;
                     if (triangles[triIdx].intersect(ray, tMin, closest, tmp, use_vertex_normals, triIdx)) {
                         hit = true;
                         closest = tmp.t;
@@ -321,8 +243,8 @@ struct BVH {
                 int rightIdx = leftIdx + 1;
 
                 float distLeft, distRight;
-                bool hitLeft = bvhNodes[leftIdx].bounds.intersectDist(ray, tMin, closest, distLeft);
-                bool hitRight = bvhNodes[rightIdx].bounds.intersectDist(ray, tMin, closest, distRight);
+                bool hitLeft = bvhNodes[leftIdx].bounds.intersectDist(ray, dRcp, tMin, closest, distLeft);
+                bool hitRight = bvhNodes[rightIdx].bounds.intersectDist(ray, dRcp, tMin, closest, distRight);
 
                 if (hitLeft && hitRight) {
                     if (stackSize + 2 <= kMaxTraversalStackSize) {
@@ -380,11 +302,12 @@ struct BVH {
             return false;
         }
 
+        Vector3f dRcp(1.0f / ray.d.x, 1.0f / ray.d.y, 1.0f / ray.d.z);
         int stack[kMaxTraversalStackSize];
         int stackSize = 0;
 
         float dummyDist;
-        if (!bvhNodes[0].bounds.intersectDist(ray, tMin, tMax, dummyDist)) {
+        if (!bvhNodes[0].bounds.intersectDist(ray, dRcp, tMin, tMax, dummyDist)) {
             return false;
         }
 
@@ -409,7 +332,7 @@ struct BVH {
                             continue;
                         }
                     }
-                    SurfaceIntersection tmp;
+                    SurfaceInteraction tmp;
                     if (tri.intersect(ray, tMin, tMax, tmp, false, triIdx)) {
                         return true;
                     }
@@ -419,8 +342,8 @@ struct BVH {
                 int rightIdx = leftIdx + 1;
 
                 float distLeft, distRight;
-                bool hitLeft = bvhNodes[leftIdx].bounds.intersectDist(ray, tMin, tMax, distLeft);
-                bool hitRight = bvhNodes[rightIdx].bounds.intersectDist(ray, tMin, tMax, distRight);
+                bool hitLeft = bvhNodes[leftIdx].bounds.intersectDist(ray, dRcp, tMin, tMax, distLeft);
+                bool hitRight = bvhNodes[rightIdx].bounds.intersectDist(ray, dRcp, tMin, tMax, distRight);
 
                 if (hitLeft && hitRight) {
                     if (stackSize + 2 <= kMaxTraversalStackSize) {
@@ -452,6 +375,7 @@ struct BVH {
             return 0;
         }
 
+        Vector3f dRcp(1.0f / ray.d.x, 1.0f / ray.d.y, 1.0f / ray.d.z);
         int aabb_tests = 0;
 
         int stack[kMaxTraversalStackSize];
@@ -459,7 +383,7 @@ struct BVH {
 
         float dummyDist;
         aabb_tests++;
-        if (!bvhNodes[0].bounds.intersectDist(ray, tMin, tMax, dummyDist)) {
+        if (!bvhNodes[0].bounds.intersectDist(ray, dRcp, tMin, tMax, dummyDist)) {
             return aabb_tests;
         }
 
@@ -477,8 +401,8 @@ struct BVH {
 
                 float distLeft, distRight;
                 aabb_tests += 2;
-                bool hitLeft = bvhNodes[leftIdx].bounds.intersectDist(ray, tMin, tMax, distLeft);
-                bool hitRight = bvhNodes[rightIdx].bounds.intersectDist(ray, tMin, tMax, distRight);
+                bool hitLeft = bvhNodes[leftIdx].bounds.intersectDist(ray, dRcp, tMin, tMax, distLeft);
+                bool hitRight = bvhNodes[rightIdx].bounds.intersectDist(ray, dRcp, tMin, tMax, distRight);
 
                 if (hitLeft && hitRight) {
                     if (stackSize + 2 <= kMaxTraversalStackSize) {
@@ -504,4 +428,4 @@ struct BVH {
     
 };
 
-} // namespace futaba
+FUTABA_NAMESPACE_END

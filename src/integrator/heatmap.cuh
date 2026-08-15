@@ -4,16 +4,9 @@
 #include "scene.cuh"
 #include "surface_interaction.cuh"
 
-namespace futaba {
+FUTABA_NAMESPACE_BEGIN
 
-// Heatmap integrator: visualises BVH traversal cost per pixel.
-//
-// Maps the number of AABB intersection tests for a given ray to a colour
-// gradient 
-// Useful for diagnosing BVH quality and geometry hot-spots.
-//
-// The normaliser (kMaxAABBTests = 512) is the AABB-test count that maps to
-// full saturation (white). Adjust it to suit your scene's complexity.
+// Visualizes BVH traversal / AABB intersection test count per pixel
 struct Heatmap {
     static constexpr int kMaxAABBTests = 512;
 
@@ -45,19 +38,5 @@ private:
     }
 };
 
-} // namespace futaba
-
-#if !defined(__CUDACC__) && defined(NANOGUI_GLAD)
-#include "integrator_ui.h"
-
-namespace futaba {
-
-class HeatmapIntegratorUI : public IntegratorUI {
-public:
-    std::string getName() const override { return "Heatmap"; }
-    int getMode() const override { return INTEGRATOR_HEATMAP; }
-};
-
-} // namespace futaba
-#endif
+FUTABA_NAMESPACE_END
 

@@ -2,163 +2,107 @@
 #include <cctype>
 #include <algorithm>
 
-namespace futaba {
+FUTABA_NAMESPACE_BEGIN
 
-Material make_diffuse_material(const PropertyList& bsdfProps,
-                              const PropertyList& emitterProps)
-{
-    const Color3f albedo   = bsdfProps.getColor("albedo",
-                             bsdfProps.getColor("reflectance", Color3f(0.8f, 0.8f, 0.8f)));
-    const Color3f emission = emitterProps.getColor("radiance",
-                             emitterProps.getColor("emission", Color3f(0.f, 0.f, 0.f)));
-    Material mat(albedo, emission, BSDF_ID_DIFFUSE, 1.000277f, 1.5f, 1.f);
-    return mat;
-}
-
-Material make_dielectric_material(const PropertyList& bsdfProps,
-                                  const PropertyList& emitterProps)
-{
-    const Color3f albedo   = bsdfProps.getColor("albedo",
-                             bsdfProps.getColor("reflectance", Color3f(1.f, 1.f, 1.f)));
-    const Color3f emission = emitterProps.getColor("radiance",
-                             emitterProps.getColor("emission", Color3f(0.f, 0.f, 0.f)));
-    const float   extIor   = bsdfProps.getFloat("extIOR",
-                             bsdfProps.getFloat("ext_ior", 1.000277f));
-    const float   ior      = bsdfProps.getFloat("intIOR",
-                             bsdfProps.getFloat("int_ior",
-                             bsdfProps.getFloat("ior", 1.5f)));
-    Material mat(albedo, emission, BSDF_ID_DIELECTRIC, extIor, ior, 1.f);
-    return mat;
-}
-
-Material make_mirror_material(const PropertyList& bsdfProps,
-                              const PropertyList& emitterProps)
-{
-    const Color3f albedo   = bsdfProps.getColor("albedo",
-                             bsdfProps.getColor("reflectance", Color3f(1.f, 1.f, 1.f)));
-    const Color3f emission = emitterProps.getColor("radiance",
-                             emitterProps.getColor("emission", Color3f(0.f, 0.f, 0.f)));
-    Material mat(albedo, emission, BSDF_ID_MIRROR, 1.000277f, 1.f, 1.f);
-    return mat;
-}
-
-Material make_microfacet_material(const PropertyList& bsdfProps,
-                                  const PropertyList& emitterProps)
-{
-    const Color3f albedo   = bsdfProps.getColor("kd",
-                             bsdfProps.getColor("reflectance", Color3f(1.f, 1.f, 1.f)));
-    const Color3f emission = emitterProps.getColor("radiance",
-                             emitterProps.getColor("emission", Color3f(0.f, 0.f, 0.f)));
-    const float extIor = bsdfProps.getFloat("extIOR",
-                         bsdfProps.getFloat("ext_ior", 1.000277f));
-    const float intIor = bsdfProps.getFloat("intIOR",
-                         bsdfProps.getFloat("int_ior",
-                         bsdfProps.getFloat("ior", 1.5046f)));
-    const float alpha  = bsdfProps.getFloat("alpha",
-                         bsdfProps.getFloat("roughness", 0.1f));
-    Material mat(albedo, emission, BSDF_ID_MICROFACET, extIor, intIor, alpha);
-    mat.isConductor = false;
-    return mat;
-}
-
-Material make_roughplastic_material(const PropertyList& bsdfProps,
-                                    const PropertyList& emitterProps)
-{
-    const Color3f albedo   = bsdfProps.getColor("diffuse_reflectance",
-                             bsdfProps.getColor("reflectance", Color3f(0.5f, 0.5f, 0.5f)));
-    const Color3f emission = emitterProps.getColor("radiance",
-                             emitterProps.getColor("emission", Color3f(0.f, 0.f, 0.f)));
-    const float extIor = bsdfProps.getFloat("extIOR",
-                         bsdfProps.getFloat("ext_ior", 1.000277f));
-    const float intIor = bsdfProps.getFloat("intIOR",
-                         bsdfProps.getFloat("int_ior",
-                         bsdfProps.getFloat("ior", 1.5046f)));
-    const float alpha  = bsdfProps.getFloat("alpha",
-                         bsdfProps.getFloat("roughness", 0.1f));
-    Material mat(albedo, emission, BSDF_ID_ROUGHPLASTIC, extIor, intIor, alpha);
-    mat.isConductor = false;
-    return mat;
-}
-
-Material make_roughdielectric_material(const PropertyList& bsdfProps,
-                                       const PropertyList& emitterProps)
-{
-    const Color3f albedo   = bsdfProps.getColor("albedo",
-                             bsdfProps.getColor("reflectance", Color3f(1.f, 1.f, 1.f)));
-    const Color3f emission = emitterProps.getColor("radiance",
-                             emitterProps.getColor("emission", Color3f(0.f, 0.f, 0.f)));
-    const float extIor = bsdfProps.getFloat("extIOR",
-                         bsdfProps.getFloat("ext_ior", 1.000277f));
-    const float ior    = bsdfProps.getFloat("intIOR",
-                         bsdfProps.getFloat("int_ior",
-                         bsdfProps.getFloat("ior", 1.5f)));
-    const float alpha  = bsdfProps.getFloat("alpha",
-                         bsdfProps.getFloat("roughness", 0.1f));
-    Material mat(albedo, emission, BSDF_ID_ROUGHDIELECTRIC, extIor, ior, alpha);
-    return mat;
-}
-
-Material make_roughconductor_material(const PropertyList& bsdfProps,
-                                      const PropertyList& emitterProps)
-{
-    const Color3f emission = emitterProps.getColor("radiance",
-                             emitterProps.getColor("emission", Color3f(0.f)));
-    
-    Color3f defaultEta(0.f);
-    Color3f defaultK(0.f);
-    
-    std::string material = bsdfProps.getString("material", "none");
-    for (auto& c : material) c = std::tolower(c);
-    
-    if (material == "copper" || material == "cu") {
-        defaultEta = Color3f(0.200683f, 0.907677f, 1.10022f);
-        defaultK   = Color3f(3.91244f, 2.45477f, 2.44215f);
-    } else if (material == "gold" || material == "au") {
-        defaultEta = Color3f(0.14276f, 0.38072f, 1.4552f);
-        defaultK   = Color3f(3.9749f, 2.3789f, 1.598f);
-    } else if (material == "aluminum" || material == "al") {
-        defaultEta = Color3f(1.34138f, 0.96602f, 0.61805f);
-        defaultK   = Color3f(7.33748f, 6.096f, 4.80216f);
-    } else if (material == "silver" || material == "ag") {
-        // Corrected Palik optical data for Ag at R(650nm) / G(550nm) / B(450nm).
-        // Old values had eta.z=1.1394, k.z=2.14 which gives only ~50% Fresnel reflectance
-        // in the blue channel, causing a strong warm/yellow tint. Correct blue-channel
-        // values give ~95%, making silver nearly achromatic (98.9% / 98.6% / 95.0%).
-        defaultEta = Color3f(0.048f, 0.050f, 0.070f);
-        defaultK   = Color3f(4.10f,  3.60f,  2.65f);
+namespace {
+    inline Color3f get_albedo_prop(const PropertyList& props, const Color3f& def = Color3f(1.f)) {
+        return props.getColor("albedo", props.getColor("reflectance", props.getColor("kd", props.getColor("diffuse_reflectance", def))));
     }
-    
-    const Color3f eta = bsdfProps.getColor("eta", defaultEta);
-    const Color3f k   = bsdfProps.getColor("k",   defaultK);
-    const Color3f spec = bsdfProps.getColor("specular_reflectance", Color3f(1.f));
-    const float extIor = bsdfProps.getFloat("extIOR",
-                         bsdfProps.getFloat("ext_ior", 1.000277f));
-    const float alpha  = bsdfProps.getFloat("alpha",
-                         bsdfProps.getFloat("roughness", 0.1f));
 
-    Material mat(Color3f(0.f), emission, BSDF_ID_ROUGHCONDUCTOR, extIor, 1.f, alpha);
-    mat.isConductor = true;
-    mat.specular = spec;
-    mat.conductorEta = eta;
-    mat.conductorK = k;
+    inline Color3f get_emission_prop(const PropertyList& props) {
+        return props.getColor("radiance", props.getColor("emission", Color3f(0.f)));
+    }
+
+    inline float get_roughness_prop(const PropertyList& props, float def = 0.1f) {
+        return props.getFloat("alpha", props.getFloat("roughness", def));
+    }
+
+    inline float get_ext_ior_prop(const PropertyList& props, float def = 1.000277f) {
+        return props.getFloat("extIOR", props.getFloat("ext_ior", def));
+    }
+
+    inline float get_int_ior_prop(const PropertyList& props, float def = 1.5f) {
+        return props.getFloat("intIOR", props.getFloat("int_ior", props.getFloat("ior", def)));
+    }
+}
+
+Material make_diffuse_material(const PropertyList& bsdfProps, const PropertyList& emitterProps) {
+    return Material(get_albedo_prop(bsdfProps, Color3f(0.8f)), get_emission_prop(emitterProps),
+                    BSDF_ID_DIFFUSE, 1.000277f, 1.5f, 1.f);
+}
+
+Material make_dielectric_material(const PropertyList& bsdfProps, const PropertyList& emitterProps) {
+    return Material(get_albedo_prop(bsdfProps, Color3f(1.f)), get_emission_prop(emitterProps),
+                    BSDF_ID_DIELECTRIC, get_ext_ior_prop(bsdfProps, 1.000277f), get_int_ior_prop(bsdfProps, 1.5f), 0.f);
+}
+
+Material make_mirror_material(const PropertyList& bsdfProps, const PropertyList& emitterProps) {
+    return Material(get_albedo_prop(bsdfProps, Color3f(1.f)), get_emission_prop(emitterProps),
+                    BSDF_ID_MIRROR, 1.000277f, 1.f, 0.f);
+}
+
+Material make_microfacet_material(const PropertyList& bsdfProps, const PropertyList& emitterProps) {
+    Material mat(get_albedo_prop(bsdfProps, Color3f(1.f)), get_emission_prop(emitterProps),
+                 BSDF_ID_MICROFACET, get_ext_ior_prop(bsdfProps, 1.000277f),
+                 get_int_ior_prop(bsdfProps, 1.5046f), get_roughness_prop(bsdfProps, 0.1f));
+    mat.isConductor = false;
     return mat;
 }
 
-Material make_thindielectric_material(const PropertyList& bsdfProps,
-                                      const PropertyList& emitterProps)
-{
-    const Color3f albedo   = bsdfProps.getColor("albedo",
-                             bsdfProps.getColor("reflectance", Color3f(1.f, 1.f, 1.f)));
-    const Color3f emission = emitterProps.getColor("radiance",
-                             emitterProps.getColor("emission", Color3f(0.f, 0.f, 0.f)));
-    const float extIor = bsdfProps.getFloat("extIOR",
-                         bsdfProps.getFloat("ext_ior", 1.000277f));
-    const float ior    = bsdfProps.getFloat("intIOR",
-                         bsdfProps.getFloat("int_ior",
-                         bsdfProps.getFloat("ior", 1.5f)));
-    Material mat(albedo, emission, BSDF_ID_THINDIELECTRIC, extIor, ior, 0.f);
+Material make_roughplastic_material(const PropertyList& bsdfProps, const PropertyList& emitterProps) {
+    Material mat(get_albedo_prop(bsdfProps, Color3f(0.5f)), get_emission_prop(emitterProps),
+                 BSDF_ID_ROUGHPLASTIC, get_ext_ior_prop(bsdfProps, 1.000277f),
+                 get_int_ior_prop(bsdfProps, 1.5046f), get_roughness_prop(bsdfProps, 0.1f));
+    mat.isConductor = false;
     return mat;
 }
+
+Material make_roughdielectric_material(const PropertyList& bsdfProps, const PropertyList& emitterProps) {
+    return Material(get_albedo_prop(bsdfProps, Color3f(1.f)), get_emission_prop(emitterProps),
+                    BSDF_ID_ROUGHDIELECTRIC, get_ext_ior_prop(bsdfProps, 1.000277f),
+                    get_int_ior_prop(bsdfProps, 1.5f), get_roughness_prop(bsdfProps, 0.1f));
+}
+
+Material make_roughconductor_material(const PropertyList& bsdfProps, const PropertyList& emitterProps) {
+    Color3f defaultEta(0.f), defaultK(0.f);
+    std::string material = bsdfProps.getString("material", "none");
+    for (auto& c : material) c = (char)std::tolower((unsigned char)c);
+
+    struct ConductorConsts { const char* name; Color3f eta, k; };
+    static const ConductorConsts kConductors[] = {
+        { "copper",   {0.200683f, 0.907677f, 1.10022f}, {3.91244f, 2.45477f, 2.44215f} },
+        { "cu",       {0.200683f, 0.907677f, 1.10022f}, {3.91244f, 2.45477f, 2.44215f} },
+        { "gold",     {0.14276f, 0.38072f, 1.4552f},    {3.9749f, 2.3789f, 1.598f} },
+        { "au",       {0.14276f, 0.38072f, 1.4552f},    {3.9749f, 2.3789f, 1.598f} },
+        { "aluminum", {1.34138f, 0.96602f, 0.61805f},   {7.33748f, 6.096f, 4.80216f} },
+        { "al",       {1.34138f, 0.96602f, 0.61805f},   {7.33748f, 6.096f, 4.80216f} },
+        { "silver",   {0.048f, 0.050f, 0.070f},         {4.10f,  3.60f,  2.65f} },
+        { "ag",       {0.048f, 0.050f, 0.070f},         {4.10f,  3.60f,  2.65f} }
+    };
+
+    for (const auto& c : kConductors) {
+        if (material == c.name) {
+            defaultEta = c.eta;
+            defaultK   = c.k;
+            break;
+        }
+    }
+
+    Material mat(Color3f(0.f), get_emission_prop(emitterProps), BSDF_ID_ROUGHCONDUCTOR,
+                 get_ext_ior_prop(bsdfProps, 1.000277f), 1.f, get_roughness_prop(bsdfProps, 0.1f));
+    mat.isConductor   = true;
+    mat.specular      = bsdfProps.getColor("specular_reflectance", Color3f(1.f));
+    mat.conductorEta  = bsdfProps.getColor("eta", defaultEta);
+    mat.conductorK    = bsdfProps.getColor("k",   defaultK);
+    return mat;
+}
+
+Material make_thindielectric_material(const PropertyList& bsdfProps, const PropertyList& emitterProps) {
+    return Material(get_albedo_prop(bsdfProps, Color3f(1.f)), get_emission_prop(emitterProps),
+                    BSDF_ID_THINDIELECTRIC, get_ext_ior_prop(bsdfProps, 1.000277f),
+                    get_int_ior_prop(bsdfProps, 1.5f), 0.f);
+}
+
 
 Material makeMaterialFromPropertyLists(
         const PropertyList&       bsdfProps,
@@ -216,4 +160,4 @@ Material makeMaterialFromPropertyLists(const PropertyList& bsdfProps,
     return makeMaterialFromPropertyLists(bsdfProps, emitterProps, sink);
 }
 
-} // namespace futaba
+FUTABA_NAMESPACE_END

@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 
-namespace futaba {
+FUTABA_NAMESPACE_BEGIN
 
 bool loadEnvMapHDR(const std::string& filename,
                    const std::string& baseDir,
@@ -20,4 +20,4 @@ bool loadEnvMapEXR(const std::string& filename,
                    int& height,
                    std::string& errorOut);
 
-} // namespace futaba
+FUTABA_NAMESPACE_END

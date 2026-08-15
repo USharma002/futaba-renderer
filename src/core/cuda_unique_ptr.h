@@ -1,12 +1,9 @@
 #pragma once
 #include <cuda_runtime.h>
 
-namespace futaba {
+FUTABA_NAMESPACE_BEGIN
 
-/**
- * @brief RAII smart pointer wrapper for CUDA device memory.
- * Automatically deallocates device memory when going out of scope.
- */
+// RAII smart pointer for CUDA device memory
 template <typename T>
 class CudaUniquePtr {
 private:
@@ -59,4 +56,4 @@ public:
     explicit operator bool() const { return m_ptr != nullptr; }
 };
 
-} // namespace futaba
+FUTABA_NAMESPACE_END
