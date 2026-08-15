@@ -1,2 +1,3 @@
-build
-scenes
+build/
+scenes/
+*.exr

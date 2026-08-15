@@ -9,6 +9,8 @@ Futaba is a high-performance, learning-oriented physically-based renderer writte
 | Dragon Cornell Box | Depth of Field |
 |:---:|:---:|
 | ![Dragon CBox](assets/dragon-cbox.png) | ![Chess DOF](assets/chess-dof.png) |
+| **Volumetric Cornell Box** | **Veach MIS** |
+| ![Volumetric Cornell Box](assets/cbox-volume.png) | ![Veach MIS](assets/veach-mis.png) |
 
 
 ## Available Visualizations
@@ -47,7 +49,8 @@ Futaba is a high-performance, learning-oriented physically-based renderer writte
 - [x] **Integrators**: 
   - [x] **Path Tracing**: Full Monte Carlo integration with Russian Roulette.
     ![Path Tracing](assets/dragon-cbox.png)
-  - [x] **Next Event Estimation**: Direct-lighting support for emissive geometry and environment lighting.
+  - [x] **Volumetric Path Tracing**: Radiative transport in homogeneous participating media with Henyey-Greenstein (HG) & Isotropic phase functions.
+  - [x] **Next Event Estimation**: Direct-lighting support for emissive geometry and environment lighting with Multiple Importance Sampling (MIS).
   - [x] **Normals**: Surface normal visualization for debugging.
     ![Surface Normals](assets/dragon-cbox-normals.png)
   - [x] **Heatmap**: AABB intersection complexity visualization.
@@ -66,7 +69,7 @@ Futaba is a high-performance, learning-oriented physically-based renderer writte
 
 - [x] Path tracing with Russian Roulette
 - [x] Next Event Estimation with MIS
-- [ ] Volumetric path tracing (homogeneous media, HG phase function)
+- [x] Volumetric path tracing (homogeneous media, HG phase function)
 - [x] Environment map emitter with importance sampling
 - [x] Thin-lens depth of field
 - [x] Image textures on materials
