@@ -6,10 +6,10 @@
 FUTABA_NAMESPACE_BEGIN
 
 struct AABB {
-    Point3f min = Point3f(1e30f);
-    Point3f max = Point3f(-1e30f);
+    Point3f min;
+    Point3f max;
 
-    HD AABB() = default;
+    HD AABB() : min(Point3f(1e30f)), max(Point3f(-1e30f)) {}
     HD AABB(const Point3f& p) : min(p), max(p) {}
     HD AABB(const Point3f& min, const Point3f& max) : min(min), max(max) {}
 
@@ -42,31 +42,27 @@ struct AABB {
 
     // Centroid of the bounding box (useful for BVH split heuristics)
     HD Point3f centroid() const {
-        return Point3f(
-            0.5f * (min.x + max.x),
-            0.5f * (min.y + max.y),
-            0.5f * (min.z + max.z)
-        );
+        return (min + max) * 0.5f;
     }
 
-    // Ray-AABB intersection test. Safely handles NaNs.
-    HD bool intersectDist(const Ray& ray, float tMin, float tMax, float& dist) const {
-        float tx1 = (min.x - ray.o.x) * ray.dRcp.x;
-        float tx2 = (max.x - ray.o.x) * ray.dRcp.x;
+    // Ray-AABB intersection test with precomputed inverse direction. Safely handles NaNs.
+    HD bool intersectDist(const Ray& ray, const Vector3f& dRcp, float tMin, float tMax, float& dist) const {
+        float tx1 = (min.x - ray.o.x) * dRcp.x;
+        float tx2 = (max.x - ray.o.x) * dRcp.x;
         float tNear = tx1 < tx2 ? tx1 : tx2;
         float tFar = tx1 > tx2 ? tx1 : tx2;
         tMin = tNear > tMin ? tNear : tMin;
         tMax = tFar < tMax ? tFar : tMax;
 
-        float ty1 = (min.y - ray.o.y) * ray.dRcp.y;
-        float ty2 = (max.y - ray.o.y) * ray.dRcp.y;
+        float ty1 = (min.y - ray.o.y) * dRcp.y;
+        float ty2 = (max.y - ray.o.y) * dRcp.y;
         tNear = ty1 < ty2 ? ty1 : ty2;
         tFar = ty1 > ty2 ? ty1 : ty2;
         tMin = tNear > tMin ? tNear : tMin;
         tMax = tFar < tMax ? tFar : tMax;
 
-        float tz1 = (min.z - ray.o.z) * ray.dRcp.z;
-        float tz2 = (max.z - ray.o.z) * ray.dRcp.z;
+        float tz1 = (min.z - ray.o.z) * dRcp.z;
+        float tz2 = (max.z - ray.o.z) * dRcp.z;
         tNear = tz1 < tz2 ? tz1 : tz2;
         tFar = tz1 > tz2 ? tz1 : tz2;
         tMin = tNear > tMin ? tNear : tMin;
@@ -77,6 +73,12 @@ struct AABB {
             return true;
         }
         return false;
+    }
+
+    // Ray-AABB intersection test computing inverse direction on-demand.
+    HD bool intersectDist(const Ray& ray, float tMin, float tMax, float& dist) const {
+        Vector3f dRcp(1.0f / ray.d.x, 1.0f / ray.d.y, 1.0f / ray.d.z);
+        return intersectDist(ray, dRcp, tMin, tMax, dist);
     }
 
     HD bool intersect(const Ray& ray, float tMin, float tMax) const {

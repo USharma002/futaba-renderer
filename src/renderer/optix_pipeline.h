@@ -19,6 +19,8 @@ public:
     futaba::CudaUniquePtr<char> d_raygenRecordsBase;
     futaba::CudaUniquePtr<char> d_missRecordBase;
     futaba::CudaUniquePtr<char> d_hitRecordBase;
+    CUdeviceptr raygenRecordRender = 0;
+    CUdeviceptr raygenRecordPath = 0;
 
     OptixPipelineManager() = default;
     ~OptixPipelineManager();

@@ -10,25 +10,30 @@ FUTABA_NAMESPACE_BEGIN
 
 struct Dielectric {
     Color3f albedo;
+    float   extIOR;
     float   intIOR;
 
-    HD Dielectric() : albedo(1.f), intIOR(1.5f) {}
-    HD Dielectric(const Color3f& tint, float ior) : albedo(tint), intIOR(ior) {}
+    HD Dielectric() : albedo(1.f), extIOR(1.000277f), intIOR(1.5f) {}
+    HD explicit Dielectric(const Color3f& tint, float int_ior = 1.5f, float ext_ior = 1.000277f)
+        : albedo(tint), extIOR(ext_ior), intIOR(int_ior) {}
 
-    // Delta BSDF: keep the interface uniform with the other BSDFs.
-    // The actual sampled transport is handled by sample(); eval/pdf are zero
-    // for explicit-light MIS and debugging consistency.
+    // Dirac Delta BSDF: continuous eval and pdf are 0
     HD Color3f eval(const BSDFSample& /*bs*/) const { return Color3f(0.f); }
     HD float   pdf (const BSDFSample& /*bs*/) const { return 0.f; }
 
-    HD Color3f sample(BSDFSample& bs, const Point2f& s2) const {
-        float etaI = bs.front_face ? 1.f : intIOR;
-        float etaT = bs.front_face ? intIOR : 1.f;
+    HD void eval_pdf(const BSDFSample& /*bs*/, Color3f& f_out, float& pdf_out) const {
+        f_out   = Color3f(0.f);
+        pdf_out = 0.f;
+    }
+
+    HD Color3f sample(BSDFSample& bs, const Point2f& u) const {
+        float etaI = bs.front_face ? extIOR : intIOR;
+        float etaT = bs.front_face ? intIOR : extIOR;
         float cosI = Frame::cos_theta(bs.wi);
         float Fr   = fresnel(cosI, etaI, etaT);
 
-        // Reflect (also handles TIR via the Fr >= 1 branch)
-        if (Fr >= 1.f - 1e-6f || s2.x < Fr) {
+        // Reflect (also handles TIR via Fr == 1)
+        if (Fr >= 1.f - 1e-6f || u.x < Fr) {
             bs.wo           = Vector3f(-bs.wi.x, -bs.wi.y, bs.wi.z);
             bs.pdf          = fmaxf(Fr, 1e-6f);
             bs.weight       = albedo;
@@ -37,12 +42,12 @@ struct Dielectric {
             return bs.weight;
         }
 
-        // Refract. The (etaI/etaT)**2 factor is the correct radiance-transport correction.
+        // Refract: (etaI/etaT)**2 factor is the radiance transport compression/expansion factor
         float eta       = etaI / etaT;
         float sin2I     = fmaxf(0.f, 1.f - cosI * cosI);
         float sin2T     = eta * eta * sin2I;
         float cosT      = sqrtf(fmaxf(0.f, 1.f - sin2T));
-        bs.wo           = Vector3f(-eta * bs.wi.x, -eta * bs.wi.y, -cosT);
+        bs.wo           = Vector3f(-eta * bs.wi.x, -eta * bs.wi.y, (cosI > 0.f ? -cosT : cosT));
         bs.pdf          = fmaxf(1.f - Fr, 1e-6f);
         bs.weight       = albedo * (eta * eta);
         bs.eta          = eta;
@@ -52,3 +57,4 @@ struct Dielectric {
 };
 
 FUTABA_NAMESPACE_END
+

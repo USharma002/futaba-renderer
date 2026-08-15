@@ -11,6 +11,15 @@ FUTABA_NAMESPACE_BEGIN
 // All points have [0, 1]^d uniform samples
 struct Warp {
 
+    HD static void fast_sincos(float angle, float* s, float* c) {
+#ifdef __CUDA_ARCH__
+        sincosf(angle, s, c);
+#else
+        *s = std::sin(angle);
+        *c = std::cos(angle);
+#endif
+    }
+
     HD static Point2f squareToUniformSquare(const Point2f &sample2){
         return sample2;
     }
@@ -26,11 +35,13 @@ struct Warp {
     HD static Vector3f squareToUniformSphere(const Point2f& sample2){
         float phi = 2.0f * M_PI * sample2.x;
         float cos_theta = 1.0f - 2.0f * sample2.y;
-        float sin_theta = sqrtf(1.0f - cos_theta * cos_theta);
+        float sin_theta = sqrtf(fmaxf(0.0f, 1.0f - cos_theta * cos_theta));
+        float sin_phi, cos_phi;
+        fast_sincos(phi, &sin_phi, &cos_phi);
         
         return Vector3f(
-            sin_theta * cosf(phi),
-            sin_theta * sinf(phi),
+            sin_theta * cos_phi,
+            sin_theta * sin_phi,
             cos_theta
         );
     }
@@ -43,11 +54,13 @@ struct Warp {
     HD static Vector3f squareToUniformHemisphere(const Point2f& sample2) {
         float phi = 2.0f * M_PI * sample2.x;
         float cos_theta = 1.0f - sample2.y;
-        float sin_theta = sqrtf(sample2.y * (2.0f - sample2.y));
+        float sin_theta = sqrtf(fmaxf(0.0f, sample2.y * (2.0f - sample2.y)));
+        float sin_phi, cos_phi;
+        fast_sincos(phi, &sin_phi, &cos_phi);
         
         return Vector3f(
-            sin_theta * cosf(phi),
-            sin_theta * sinf(phi),
+            sin_theta * cos_phi,
+            sin_theta * sin_phi,
             cos_theta
         );
     }
@@ -62,11 +75,13 @@ struct Warp {
     HD static Vector3f squareToCosineHemisphere(const Point2f& sample2) {
         float phi = 2.0f * M_PI * sample2.x;
         float cos_theta = sqrtf(sample2.y);
-        float sin_theta = sqrtf(1.0f - sample2.y);
+        float sin_theta = sqrtf(fmaxf(0.0f, 1.0f - sample2.y));
+        float sin_phi, cos_phi;
+        fast_sincos(phi, &sin_phi, &cos_phi);
         
         return Vector3f(
-            sin_theta * cosf(phi),
-            sin_theta * sinf(phi),
+            sin_theta * cos_phi,
+            sin_theta * sin_phi,
             cos_theta
         );
     }
@@ -96,7 +111,9 @@ struct Warp {
             theta = (M_PI / 2.0f) - (M_PI / 4.0f) * (a / b);
         }
 
-        return Point2f(r * cosf(theta), r * sinf(theta));
+        float sin_t, cos_t;
+        fast_sincos(theta, &sin_t, &cos_t);
+        return Point2f(r * cos_t, r * sin_t);
     }
 
     // Beckmann normal distribution function D(wh).
@@ -132,10 +149,12 @@ struct Warp {
         const float tan2Theta = -a * a * logf(fmaxf(1.f - u, 1e-7f));
         const float cosTheta = 1.f / sqrtf(1.f + tan2Theta);
         const float sinTheta = sqrtf(fmaxf(0.f, 1.f - cosTheta * cosTheta));
+        float sin_phi, cos_phi;
+        fast_sincos(phi, &sin_phi, &cos_phi);
 
         return Vector3f(
-            sinTheta * cosf(phi),
-            sinTheta * sinf(phi),
+            sinTheta * cos_phi,
+            sinTheta * sin_phi,
             cosTheta
         );
     }

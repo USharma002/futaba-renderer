@@ -41,6 +41,7 @@ enum ETag {
     EIntegrator,
     ERef,
     ETransform,
+    EMedium,
 
     // Properties
     EBoolean,
@@ -57,6 +58,7 @@ enum ETag {
     EScale,
     ERotate,
     EMatrix,
+    ELookat,
 
     EInvalid
 };
@@ -73,6 +75,7 @@ static ETag getTag(const std::string& name) {
         { "integrator", EIntegrator },
         { "ref",        ERef },
         { "transform",  ETransform },
+        { "medium",     EMedium },
         { "boolean",    EBoolean },
         { "integer",    EInteger },
         { "float",      EFloat },
@@ -86,110 +89,84 @@ static ETag getTag(const std::string& name) {
         { "translate",  ETranslate },
         { "scale",      EScale },
         { "rotate",     ERotate },
-        { "matrix",     EMatrix }
+        { "matrix",     EMatrix },
+        { "lookat",     ELookat }
     };
     auto it = tags.find(name);
     return (it != tags.end()) ? it->second : EInvalid;
 }
 
-static float toF(const std::string& s) { return std::stof(s); }
-
-static bool parseMatrix4fValue(const std::string& s, Matrix4f& outM) {
-    std::string tmp = s;
-    for (char& c : tmp) if (c == ',') c = ' ';
-    std::istringstream ss(tmp);
-
-    std::array<float, 16> v{};
-    for (int i = 0; i < 16; ++i) {
-        if (!(ss >> v[i]))
-            return false;
+static inline const char* skipSeparators(const char* p) {
+    while (*p && (*p == ' ' || *p == ',' || *p == '\t' || *p == '\r' || *p == '\n')) {
+        ++p;
     }
+    return p;
+}
 
-    int k = 0;
-    for (int r = 0; r < 4; ++r)
-        for (int c = 0; c < 4; ++c)
-            outM.m[r][c] = v[k++];
+static inline bool parseNextFloat(const char*& p, float& out) {
+    p = skipSeparators(p);
+    if (!*p) return false;
+    char* end = nullptr;
+    out = std::strtof(p, &end);
+    if (p == end) return false;
+    p = end;
     return true;
 }
 
-static Matrix4f inverseTransposeUpper3x3(const Matrix4f& m) {
-    const float a = m.m[0][0], b = m.m[0][1], c = m.m[0][2];
-    const float d = m.m[1][0], e = m.m[1][1], f = m.m[1][2];
-    const float g = m.m[2][0], h = m.m[2][1], i = m.m[2][2];
-
-    const float A = e * i - f * h;
-    const float B = -(d * i - f * g);
-    const float C = d * h - e * g;
-    const float D = -(b * i - c * h);
-    const float E = a * i - c * g;
-    const float F = -(a * h - b * g);
-    const float G = b * f - c * e;
-    const float H = -(a * f - c * d);
-    const float I = a * e - b * d;
-
-    const float det = a * A + b * B + c * C;
-    if (fabsf(det) <= 1e-12f)
-        return Matrix4f();
-
-    const float invDet = 1.f / det;
-    Matrix4f n;
-
-    n.m[0][0] = A * invDet; n.m[0][1] = B * invDet; n.m[0][2] = C * invDet;
-    n.m[1][0] = D * invDet; n.m[1][1] = E * invDet; n.m[1][2] = F * invDet;
-    n.m[2][0] = G * invDet; n.m[2][1] = H * invDet; n.m[2][2] = I * invDet;
-
-    n.m[0][3] = n.m[1][3] = n.m[2][3] = 0.f;
-    n.m[3][0] = n.m[3][1] = n.m[3][2] = 0.f;
-    n.m[3][3] = 1.f;
-    return n;
+static inline Vector3f parseVec3(const std::string& s) {
+    const char* p = s.c_str();
+    float v[3] = {0.f, 0.f, 0.f};
+    int count = 0;
+    while (count < 3 && parseNextFloat(p, v[count])) {
+        ++count;
+    }
+    if (count == 0) return Vector3f(0.f);
+    if (count == 1) return Vector3f(v[0]);
+    if (count == 2) return Vector3f(v[0], v[1], 0.f);
+    return Vector3f(v[0], v[1], v[2]);
 }
 
-static Vector3f parseVec3(const std::string& s) {
-    std::string tmp = s;
-    for (char& c : tmp) if (c == ',' || c == '\t' || c == '\r' || c == '\n') c = ' ';
-    std::istringstream ss(tmp);
-    std::vector<float> values;
-    float val;
-    while (ss >> val) {
-        values.push_back(val);
+static inline bool parseMatrix4fValue(const std::string& s, Matrix4f& outM) {
+    const char* p = s.c_str();
+    for (int r = 0; r < 4; ++r) {
+        for (int c = 0; c < 4; ++c) {
+            if (!parseNextFloat(p, outM.m[r][c]))
+                return false;
+        }
     }
-
-    if (values.empty()) {
-        throw std::runtime_error("Failed to parse vec3 from empty string: '" + s + "'");
-    }
-    if (values.size() == 1) {
-        return Vector3f(values[0], values[0], values[0]);
-    }
-    if (values.size() == 2) {
-        return Vector3f(values[0], values[1], 0.f);
-    }
-    return Vector3f(values[0], values[1], values[2]);
+    return true;
 }
 
-static std::string resolveValue(const std::string& raw, const std::unordered_map<std::string, std::string>& defaults) {
+static inline float toF(const std::string& s) {
+    const char* p = s.c_str();
+    float v = 0.f;
+    parseNextFloat(p, v);
+    return v;
+}
+
+static inline std::string resolveValue(const std::string& raw, const std::unordered_map<std::string, std::string>& defaults) {
     if (raw.size() > 1 && raw[0] == '$') {
-        const std::string key = raw.substr(1);
-        const auto it = defaults.find(key);
+        const auto it = defaults.find(raw.substr(1));
         if (it != defaults.end())
             return it->second;
     }
     return raw;
 }
 
-static Vector3f parseVectorOrPoint(const pugi::xml_node& node,
-                            const std::unordered_map<std::string, std::string>& defaults)
+static inline Vector3f parseVectorOrPoint(const pugi::xml_node& node,
+                                         const std::unordered_map<std::string, std::string>& defaults)
 {
-    std::string valStr = resolveValue(node.attribute("value").value(), defaults);
-    if (!valStr.empty()) {
-        return parseVec3(valStr);
+    const char* valAttr = node.attribute("value").value();
+    if (valAttr && *valAttr) {
+        return parseVec3(resolveValue(valAttr, defaults));
     }
     float x = 0.f, y = 0.f, z = 0.f;
-    std::string xStr = resolveValue(node.attribute("x").value(), defaults);
-    std::string yStr = resolveValue(node.attribute("y").value(), defaults);
-    std::string zStr = resolveValue(node.attribute("z").value(), defaults);
-    if (!xStr.empty()) x = std::stof(xStr);
-    if (!yStr.empty()) y = std::stof(yStr);
-    if (!zStr.empty()) z = std::stof(zStr);
+    const char* xAttr = node.attribute("x").value();
+    const char* yAttr = node.attribute("y").value();
+    const char* zAttr = node.attribute("z").value();
+    if (xAttr && *xAttr) x = std::strtof(resolveValue(xAttr, defaults).c_str(), nullptr);
+    if (yAttr && *yAttr) y = std::strtof(resolveValue(yAttr, defaults).c_str(), nullptr);
+    if (zAttr && *zAttr) z = std::strtof(resolveValue(zAttr, defaults).c_str(), nullptr);
     return Vector3f(x, y, z);
 }
 
@@ -206,12 +183,12 @@ static void parseProperty(const pugi::xml_node& node, PropertyList& list, const 
         }
         case EInteger: {
             std::string val = resolveValue(node.attribute("value").value(), defaults);
-            list.setInteger(name, std::stoi(val));
+            list.setInteger(name, std::strtol(val.c_str(), nullptr, 10));
             break;
         }
         case EFloat: {
             std::string val = resolveValue(node.attribute("value").value(), defaults);
-            list.setFloat(name, std::stof(val));
+            list.setFloat(name, toF(val));
             break;
         }
         case EString: {
@@ -284,6 +261,50 @@ static bool flattenBsdfNode(const pugi::xml_node& bsdfNode,
     return true;
 }
 
+static void extractMaterialTextures(const PropertyList& bsdfProps,
+                                   std::string& texPath,
+                                   std::string& nmPath)
+{
+    texPath.clear();
+    nmPath.clear();
+
+    if (bsdfProps.hasProperty("reflectance_texture")) texPath = bsdfProps.getString("reflectance_texture");
+    else if (bsdfProps.hasProperty("diffuse_reflectance_texture")) texPath = bsdfProps.getString("diffuse_reflectance_texture");
+    else if (bsdfProps.hasProperty("specular_reflectance_texture")) texPath = bsdfProps.getString("specular_reflectance_texture");
+
+    if (texPath.empty()) {
+        for (const auto& [propName, propVal] : bsdfProps.getProperties()) {
+            if (const auto* s = std::get_if<std::string>(&propVal)) {
+                std::string valLower = *s;
+                for (auto& c : valLower) c = std::tolower(c);
+                if (propName.find("texture") != std::string::npos ||
+                    valLower.find(".png") != std::string::npos ||
+                    valLower.find(".jpg") != std::string::npos ||
+                    valLower.find(".tga") != std::string::npos ||
+                    valLower.find(".bmp") != std::string::npos) {
+                    texPath = *s;
+                    break;
+                }
+            }
+        }
+    }
+
+    if (bsdfProps.hasProperty("normalmap_texture")) nmPath = bsdfProps.getString("normalmap_texture");
+    else if (bsdfProps.hasProperty("normal_texture")) nmPath = bsdfProps.getString("normal_texture");
+    else nmPath = bsdfProps.getString("normalmap", bsdfProps.getString("normal", ""));
+
+    if (nmPath.empty()) {
+        for (const auto& [propName, propVal] : bsdfProps.getProperties()) {
+            if (const auto* s = std::get_if<std::string>(&propVal)) {
+                if (propName.find("normal") != std::string::npos && *s != texPath) {
+                    nmPath = *s;
+                    break;
+                }
+            }
+        }
+    }
+}
+
 static void parseTransform(const pugi::xml_node& node, Matrix4f& transform, Matrix4f& normalTransform, const std::unordered_map<std::string, std::string>& defaults) {
     for (const pugi::xml_node& op : node.children()) {
         ETag tag = getTag(op.name());
@@ -318,11 +339,7 @@ static void parseTransform(const pugi::xml_node& node, Matrix4f& transform, Matr
                     if (zStr == "1" || zStr == "true") axis.z = 1.f;
                 }
                 float len = length(axis);
-                if (len > 1e-6f) {
-                    axis = axis / len;
-                } else {
-                    axis = Vector3f(1.f, 0.f, 0.f);
-                }
+                axis = (len > 1e-6f) ? (axis / len) : Vector3f(1.f, 0.f, 0.f);
                 const float angle = toF(resolveValue(op.attribute("angle").value(), defaults));
                 transform   = Matrix4f::rotate(axis, angle) * transform;
                 normalTransform = Matrix4f::rotate(axis, angle) * normalTransform;
@@ -331,8 +348,20 @@ static void parseTransform(const pugi::xml_node& node, Matrix4f& transform, Matr
             case EMatrix: {
                 Matrix4f explicitM;
                 if (parseMatrix4fValue(resolveValue(op.attribute("value").value(), defaults), explicitM)) {
-                    transform = explicitM;
-                    normalTransform = inverseTransposeUpper3x3(explicitM);
+                    transform = explicitM * transform;
+                    normalTransform = Matrix4f::inverseTransposeUpper3x3(explicitM) * normalTransform;
+                }
+                break;
+            }
+            case ELookat: {
+                std::string oStr = resolveValue(op.attribute("origin").value(), defaults);
+                std::string tStr = resolveValue(op.attribute("target").value(), defaults);
+                std::string uStr = resolveValue(op.attribute("up").value(), defaults);
+                if (!oStr.empty() && !tStr.empty()) {
+                    Vector3f o = parseVec3(oStr), t = parseVec3(tStr), u = !uStr.empty() ? parseVec3(uStr) : Vector3f(0.f, 1.f, 0.f);
+                    Matrix4f lookatM = Matrix4f::lookAt(Point3f(o.x, o.y, o.z), Point3f(t.x, t.y, t.z), u);
+                    transform = lookatM * transform;
+                    normalTransform = Matrix4f::inverseTransposeUpper3x3(lookatM) * normalTransform;
                 }
                 break;
             }
@@ -373,10 +402,7 @@ static bool parseMesh(const std::string& baseDir,
     const auto& attrib = reader.GetAttrib();
     const auto& shapes = reader.GetShapes();
 
-    const uint32_t meshTriangleStart = (uint32_t)out.triangles.size();
-    const int meshId = (int)out.meshes.size();
-    
-    AABB bbox;
+    std::vector<Triangle> localTriangles;
 
     for (size_t s = 0; s < shapes.size(); s++) {
         size_t index_offset = 0;
@@ -388,37 +414,28 @@ static bool parseMesh(const std::string& baseDir,
             }
 
             Triangle tri;
-            tri.material_id = materialId;
-            tri.mesh_id = meshId;
-
             Point3f pts[3];
             Vector3f norms[3];
             Point2f uvs[3];
-            bool has_n = true;
-            bool has_uv = true;
+            bool has_n = true, has_uv = true;
 
             for (size_t v = 0; v < 3; v++) {
                 tinyobj::index_t idx = shapes[s].mesh.indices[index_offset + v];
-                float vx = attrib.vertices[3 * size_t(idx.vertex_index) + 0];
-                float vy = attrib.vertices[3 * size_t(idx.vertex_index) + 1];
-                float vz = attrib.vertices[3 * size_t(idx.vertex_index) + 2];
-                pts[v] = transform * Point3f(vx, vy, vz);
-
-                bbox.grow(pts[v]);
+                pts[v] = Point3f(attrib.vertices[3 * size_t(idx.vertex_index) + 0],
+                                 attrib.vertices[3 * size_t(idx.vertex_index) + 1],
+                                 attrib.vertices[3 * size_t(idx.vertex_index) + 2]);
 
                 if (idx.normal_index >= 0) {
-                    float nx = attrib.normals[3 * size_t(idx.normal_index) + 0];
-                    float ny = attrib.normals[3 * size_t(idx.normal_index) + 1];
-                    float nz = attrib.normals[3 * size_t(idx.normal_index) + 2];
-                    norms[v] = normalize(normalTransform * Vector3f(nx, ny, nz));
+                    norms[v] = Vector3f(attrib.normals[3 * size_t(idx.normal_index) + 0],
+                                        attrib.normals[3 * size_t(idx.normal_index) + 1],
+                                        attrib.normals[3 * size_t(idx.normal_index) + 2]);
                 } else {
                     has_n = false;
                 }
 
                 if (idx.texcoord_index >= 0) {
-                    float tx = attrib.texcoords[2 * size_t(idx.texcoord_index) + 0];
-                    float ty = attrib.texcoords[2 * size_t(idx.texcoord_index) + 1];
-                    uvs[v] = Point2f(tx, ty);
+                    uvs[v] = Point2f(attrib.texcoords[2 * size_t(idx.texcoord_index) + 0],
+                                     attrib.texcoords[2 * size_t(idx.texcoord_index) + 1]);
                 } else {
                     has_uv = false;
                 }
@@ -428,40 +445,49 @@ static bool parseMesh(const std::string& baseDir,
             if (has_n) {
                 tri.n0 = norms[0]; tri.n1 = norms[1]; tri.n2 = norms[2];
                 tri.has_normals = true;
-            } else {
-                tri.has_normals = false;
             }
             if (has_uv) {
                 tri.uv0 = uvs[0]; tri.uv1 = uvs[1]; tri.uv2 = uvs[2];
                 tri.has_uvs = true;
-            } else {
-                tri.has_uvs = false;
             }
 
-            out.triangles.push_back(tri);
+            localTriangles.push_back(tri);
             index_offset += fv;
         }
     }
 
-    if (out.triangles.size() == meshTriangleStart) {
+    if (localTriangles.empty()) {
         errorOut = "OBJ file has no triangles: " + objPath.string();
         return false;
     }
 
-    const uint32_t meshTriangleCount = (uint32_t)out.triangles.size() - meshTriangleStart;
+    return appendMeshGeometry(meshName, materialId, emitterId, transform, normalTransform, localTriangles, out);
+}
 
-    MeshInstance meshInst;
-    meshInst.materialId    = materialId;
-    meshInst.triangleStart = meshTriangleStart;
-    meshInst.triangleCount = meshTriangleCount;
-    meshInst.transform     = transform;
-    meshInst.emitterType   = (emitterId >= 0) ? EmitterType::Area : EmitterType::None;
-    meshInst.emitterId     = emitterId;
-    meshInst.bbox          = bbox;
-
-    out.meshes.push_back(meshInst);
-    out.meshNames.push_back(meshName);
-    return true;
+static void computeMeshVertexNormals(const std::vector<std::array<double, 3>>& vPos,
+                                     const std::vector<std::vector<size_t>>& fInd,
+                                     std::vector<Vector3f>& computedNormals)
+{
+    computedNormals.assign(vPos.size(), Vector3f(0.f));
+    for (const auto& face : fInd) {
+        if (face.size() < 3) continue;
+        for (size_t i = 1; i + 1 < face.size(); ++i) {
+            size_t idx0 = face[0];
+            size_t idx1 = face[i];
+            size_t idx2 = face[i+1];
+            Point3f p0((float)vPos[idx0][0], (float)vPos[idx0][1], (float)vPos[idx0][2]);
+            Point3f p1((float)vPos[idx1][0], (float)vPos[idx1][1], (float)vPos[idx1][2]);
+            Point3f p2((float)vPos[idx2][0], (float)vPos[idx2][1], (float)vPos[idx2][2]);
+            Vector3f fn = cross(p1 - p0, p2 - p0);
+            computedNormals[idx0] += fn;
+            computedNormals[idx1] += fn;
+            computedNormals[idx2] += fn;
+        }
+    }
+    for (auto& n : computedNormals) {
+        if (n.lengthSquared() > 0.f)
+            n = normalize(n);
+    }
 }
 
 static bool parseMeshPLY(const std::string& baseDir,
@@ -512,72 +538,53 @@ static bool parseMeshPLY(const std::string& baseDir,
         }
 
         std::vector<std::vector<size_t>> fInd = plyIn.getFaceIndices<size_t>();
+        std::vector<Triangle> localTriangles;
 
-        const uint32_t meshTriangleStart = (uint32_t)out.triangles.size();
-        const int meshId = (int)out.meshes.size();
-        
-        AABB bbox;
+        std::vector<Vector3f> computedNormals;
+        if (!hasNormals) {
+            computeMeshVertexNormals(vPos, fInd, computedNormals);
+        }
 
         for (const auto& face : fInd) {
             if (face.size() < 3) continue;
             for (size_t i = 1; i + 1 < face.size(); ++i) {
                 Triangle tri;
-                tri.material_id = materialId;
-                tri.mesh_id = meshId;
-
                 size_t idx0 = face[0];
                 size_t idx1 = face[i];
                 size_t idx2 = face[i+1];
 
-                tri.p0 = transform * Point3f((float)vPos[idx0][0], (float)vPos[idx0][1], (float)vPos[idx0][2]);
-                tri.p1 = transform * Point3f((float)vPos[idx1][0], (float)vPos[idx1][1], (float)vPos[idx1][2]);
-                tri.p2 = transform * Point3f((float)vPos[idx2][0], (float)vPos[idx2][1], (float)vPos[idx2][2]);
-
-                bbox.grow(tri.p0);
-                bbox.grow(tri.p1);
-                bbox.grow(tri.p2);
+                tri.p0 = Point3f((float)vPos[idx0][0], (float)vPos[idx0][1], (float)vPos[idx0][2]);
+                tri.p1 = Point3f((float)vPos[idx1][0], (float)vPos[idx1][1], (float)vPos[idx1][2]);
+                tri.p2 = Point3f((float)vPos[idx2][0], (float)vPos[idx2][1], (float)vPos[idx2][2]);
 
                 if (hasNormals) {
-                    tri.n0 = normalize(normalTransform * Vector3f((float)vNormals[idx0][0], (float)vNormals[idx0][1], (float)vNormals[idx0][2]));
-                    tri.n1 = normalize(normalTransform * Vector3f((float)vNormals[idx1][0], (float)vNormals[idx1][1], (float)vNormals[idx1][2]));
-                    tri.n2 = normalize(normalTransform * Vector3f((float)vNormals[idx2][0], (float)vNormals[idx2][1], (float)vNormals[idx2][2]));
-                    tri.has_normals = true;
+                    tri.n0 = Vector3f((float)vNormals[idx0][0], (float)vNormals[idx0][1], (float)vNormals[idx0][2]);
+                    tri.n1 = Vector3f((float)vNormals[idx1][0], (float)vNormals[idx1][1], (float)vNormals[idx1][2]);
+                    tri.n2 = Vector3f((float)vNormals[idx2][0], (float)vNormals[idx2][1], (float)vNormals[idx2][2]);
                 } else {
-                    tri.has_normals = false;
+                    tri.n0 = computedNormals[idx0];
+                    tri.n1 = computedNormals[idx1];
+                    tri.n2 = computedNormals[idx2];
                 }
+                tri.has_normals = true;
 
                 if (hasUVs) {
                     tri.uv0 = Point2f((float)vUVs[idx0][0], (float)vUVs[idx0][1]);
                     tri.uv1 = Point2f((float)vUVs[idx1][0], (float)vUVs[idx1][1]);
                     tri.uv2 = Point2f((float)vUVs[idx2][0], (float)vUVs[idx2][1]);
                     tri.has_uvs = true;
-                } else {
-                    tri.has_uvs = false;
                 }
 
-                out.triangles.push_back(tri);
+                localTriangles.push_back(tri);
             }
         }
 
-        if (out.triangles.size() == meshTriangleStart) {
+        if (localTriangles.empty()) {
             errorOut = "PLY file has no triangles: " + plyPath.string();
             return false;
         }
 
-        const uint32_t meshTriangleCount = (uint32_t)out.triangles.size() - meshTriangleStart;
-
-        MeshInstance meshInst;
-        meshInst.materialId    = materialId;
-        meshInst.triangleStart = meshTriangleStart;
-        meshInst.triangleCount = meshTriangleCount;
-        meshInst.transform     = transform;
-        meshInst.emitterType   = (emitterId >= 0) ? EmitterType::Area : EmitterType::None;
-        meshInst.emitterId     = emitterId;
-        meshInst.bbox          = bbox;
-
-        out.meshes.push_back(meshInst);
-        out.meshNames.push_back(meshName);
-        return true;
+        return appendMeshGeometry(meshName, materialId, emitterId, transform, normalTransform, localTriangles, out);
     } catch (const std::exception& e) {
         errorOut = std::string("Error parsing PLY: ") + e.what();
         return false;
@@ -601,6 +608,39 @@ static bool parseCamera(const std::string& originStr,
     out.camera.fov    = fov;
     out.camera.hasCamera = true;
     return true;
+}
+
+static Medium parseMediumNode(const pugi::xml_node& node, const std::unordered_map<std::string, std::string>& defaults) {
+    PropertyList props;
+    parseProperties(node, props, defaults);
+
+    float scale = props.getFloat("scale", 1.0f);
+    float g = props.getFloat("g", 0.0f);
+
+    for (const pugi::xml_node& child : node.children()) {
+        if (std::string(child.name()) == "phase") {
+            PropertyList phaseProps;
+            parseProperties(child, phaseProps, defaults);
+            g = phaseProps.getFloat("g", g);
+        }
+    }
+
+    Color3f sigma_s(0.f), sigma_a(0.f), sigma_t(0.f);
+
+    if (props.hasProperty("sigma_t") || props.hasProperty("albedo")) {
+        sigma_t = props.getColor("sigma_t", Color3f(1.f)) * scale;
+        Color3f alb = props.getColor("albedo", Color3f(1.f));
+        sigma_s = sigma_t * alb;
+        sigma_a = Color3f(fmaxf(0.f, sigma_t.x - sigma_s.x),
+                          fmaxf(0.f, sigma_t.y - sigma_s.y),
+                          fmaxf(0.f, sigma_t.z - sigma_s.z));
+    } else {
+        sigma_s = props.getColor("sigma_s", Color3f(0.f)) * scale;
+        sigma_a = props.getColor("sigma_a", Color3f(0.f)) * scale;
+        sigma_t = sigma_s + sigma_a;
+    }
+
+    return Medium(sigma_a, sigma_s, g);
 }
 
 } // anonymous namespace
@@ -629,6 +669,7 @@ bool SceneLoader::load(const std::string& xmlPath,
 
     int nextMatId = 0;
     std::unordered_map<std::string, int> bsdfIdToMaterial;
+    std::unordered_map<std::string, int> mediumIdToMedium;
     std::unordered_map<std::string, std::string> defaults;
 
     for (const pugi::xml_node& node : root.children()) {
@@ -638,6 +679,22 @@ bool SceneLoader::load(const std::string& xmlPath,
         const std::string val = node.attribute("value").value();
         if (!key.empty())
             defaults[key] = val;
+    }
+
+    // Collect top-level Medium definitions
+    for (const pugi::xml_node& node : root.children()) {
+        if (getTag(node.name()) != EMedium)
+            continue;
+
+        std::string medId = node.attribute("id").value();
+        if (medId.empty())
+            continue;
+
+        Medium med = parseMediumNode(node, defaults);
+        int medIdx = (int)out.media.size();
+        out.media.push_back(med);
+        out.mediumNames.push_back(medId);
+        mediumIdToMedium[medId] = medIdx;
     }
 
     // First pass: collect top-level BSDF definitions
@@ -664,11 +721,10 @@ bool SceneLoader::load(const std::string& xmlPath,
         out.materials.emplace_back(makeMaterialFromPropertyLists(bsdfProps, PropertyList(), out.warnings));
         bsdfIdToMaterial[bsdfId] = materialId;
 
-        std::string texPath;
-        if (bsdfProps.hasProperty("reflectance_texture")) texPath = bsdfProps.getString("reflectance_texture");
-        else if (bsdfProps.hasProperty("diffuse_reflectance_texture")) texPath = bsdfProps.getString("diffuse_reflectance_texture");
-        else if (bsdfProps.hasProperty("specular_reflectance_texture")) texPath = bsdfProps.getString("specular_reflectance_texture");
+        std::string texPath, nmPath;
+        extractMaterialTextures(bsdfProps, texPath, nmPath);
         out.materialTexturePaths.push_back(texPath);
+        out.materialNormalMapPaths.push_back(nmPath);
     }
 
     for (const pugi::xml_node& node : root.children()) {
@@ -680,13 +736,16 @@ bool SceneLoader::load(const std::string& xmlPath,
                     PropertyList meshProps;
                     parseProperties(node, meshProps, defaults);
 
-                    const std::string shapeType = (std::string(node.name()) == "shape")
-                        ? std::string(node.attribute("type").value())
-                        : std::string("obj");
+                    std::string shapeType = std::string(node.attribute("type").value());
+                    std::string objFile = meshProps.getString("filename");
 
-                    std::string objFile;
-                    if (shapeType == "obj" || shapeType == "ply" || std::string(node.name()) == "mesh")
-                        objFile = meshProps.getString("filename");
+                    if (shapeType.empty() || shapeType == "mesh") {
+                        if (fs::path(objFile).extension() == ".ply") {
+                            shapeType = "ply";
+                        } else {
+                            shapeType = "obj";
+                        }
+                    }
 
                     std::string meshName = node.attribute("id").value();
                     if (meshName.empty()) {
@@ -698,6 +757,8 @@ bool SceneLoader::load(const std::string& xmlPath,
                     PropertyList bsdfProps, emitterProps;
                     int materialId = -1;
                     int emitterId = -1;
+                    int interiorMediumId = -1;
+                    int exteriorMediumId = -1;
 
                     Matrix4f meshTransform;
                     Matrix4f normalTransform;
@@ -708,13 +769,30 @@ bool SceneLoader::load(const std::string& xmlPath,
                             case EBsdf:
                                 flattenBsdfNode(child, bsdfProps, out.warnings, defaults);
                                 break;
+                            case EMedium: {
+                                std::string medName = child.attribute("name").value();
+                                Medium med = parseMediumNode(child, defaults);
+                                int medIdx = (int)out.media.size();
+                                out.media.push_back(med);
+                                out.mediumNames.push_back(medName.empty() ? ("med_" + std::to_string(medIdx)) : medName);
+                                if (medName == "exterior") exteriorMediumId = medIdx;
+                                else interiorMediumId = medIdx;
+                                break;
+                            }
                             case ERef: {
                                 const std::string refId = child.attribute("id").value();
-                                auto it = bsdfIdToMaterial.find(refId);
-                                if (it != bsdfIdToMaterial.end()) {
-                                    materialId = it->second;
+                                const std::string refName = child.attribute("name").value();
+                                auto itM = mediumIdToMedium.find(refId);
+                                if (itM != mediumIdToMedium.end()) {
+                                    if (refName == "exterior") exteriorMediumId = itM->second;
+                                    else interiorMediumId = itM->second;
                                 } else {
-                                    out.warnings.push_back("Shape references unknown BSDF id '" + refId + "'; using diffuse fallback.");
+                                    auto it = bsdfIdToMaterial.find(refId);
+                                    if (it != bsdfIdToMaterial.end()) {
+                                        materialId = it->second;
+                                    } else {
+                                        out.warnings.push_back("Shape references unknown BSDF/Medium id '" + refId + "'; using diffuse fallback.");
+                                    }
                                 }
                                 break;
                             }
@@ -755,20 +833,24 @@ bool SceneLoader::load(const std::string& xmlPath,
                             makeMaterialFromPropertyLists(bsdfProps, emitterProps, out.warnings));
                         materialId = (int)out.materials.size() - 1;
 
-                        std::string texPath;
-                        if (bsdfProps.hasProperty("reflectance_texture")) texPath = bsdfProps.getString("reflectance_texture");
-                        else if (bsdfProps.hasProperty("diffuse_reflectance_texture")) texPath = bsdfProps.getString("diffuse_reflectance_texture");
-                        else if (bsdfProps.hasProperty("specular_reflectance_texture")) texPath = bsdfProps.getString("specular_reflectance_texture");
+                        std::string texPath, nmPath;
+                        extractMaterialTextures(bsdfProps, texPath, nmPath);
                         out.materialTexturePaths.push_back(texPath);
+                        out.materialNormalMapPaths.push_back(nmPath);
                     }
 
-                    if (shapeType == "obj" || std::string(node.name()) == "mesh") {
-                        if (!parseMesh(baseDir, objFile, meshName, materialId,
-                                       emitterId, meshTransform, normalTransform, out, errorOut))
-                            return false;
-                    } else if (shapeType == "ply") {
+                    if (materialId >= 0 && (size_t)materialId < out.materials.size()) {
+                        if (interiorMediumId >= 0) out.materials[materialId].interiorMediumId = interiorMediumId;
+                        if (exteriorMediumId >= 0) out.materials[materialId].exteriorMediumId = exteriorMediumId;
+                    }
+
+                    if (shapeType == "ply" || fs::path(objFile).extension() == ".ply") {
                         if (!parseMeshPLY(baseDir, objFile, meshName, materialId,
                                           emitterId, meshTransform, normalTransform, out, errorOut))
+                            return false;
+                    } else if (shapeType == "obj" || shapeType == "mesh" || std::string(node.name()) == "mesh") {
+                        if (!parseMesh(baseDir, objFile, meshName, materialId,
+                                       emitterId, meshTransform, normalTransform, out, errorOut))
                             return false;
                     } else if (shapeType == "rectangle") {
                         appendRectangleShape(meshName, materialId, emitterId,

@@ -18,53 +18,21 @@ using namespace nanogui;
 using namespace futaba;
 namespace fs = std::filesystem;
 
-static constexpr float kMinFov = 5.f;
-static constexpr float kMaxFov = 120.f;
-static constexpr float kMinFocusDistance = 0.1f;
-static constexpr float kMaxFocusDistance = 50.f;
-static constexpr float kMinApertureRadius = 0.f;
-static constexpr float kMaxApertureRadius = 0.5f;
+static constexpr float kMinFov = 5.f, kMaxFov = 120.f;
+static constexpr float kMinFocusDistance = 0.1f, kMaxFocusDistance = 50.f;
+static constexpr float kMinApertureRadius = 0.f, kMaxApertureRadius = 0.5f;
 
-static float fovToSlider(float fov) {
-    float t = (fov - kMinFov) / (kMaxFov - kMinFov);
-    if (t < 0.f) t = 0.f;
-    if (t > 1.f) t = 1.f;
-    return t;
-}
+inline float toSlider(float v, float minV, float maxV) { return std::clamp((v - minV) / (maxV - minV), 0.f, 1.f); }
+inline float fromSlider(float t, float minV, float maxV) { return minV + std::clamp(t, 0.f, 1.f) * (maxV - minV); }
 
-static float sliderToFov(float t) {
-    if (t < 0.f) t = 0.f;
-    if (t > 1.f) t = 1.f;
-    return kMinFov + t * (kMaxFov - kMinFov);
-}
+static float fovToSlider(float fov) { return toSlider(fov, kMinFov, kMaxFov); }
+static float sliderToFov(float t) { return fromSlider(t, kMinFov, kMaxFov); }
+static float focusDistanceToSlider(float d) { return toSlider(d, kMinFocusDistance, kMaxFocusDistance); }
+static float sliderToFocusDistance(float t) { return fromSlider(t, kMinFocusDistance, kMaxFocusDistance); }
+static float apertureToSlider(float a) { return toSlider(a, kMinApertureRadius, kMaxApertureRadius); }
+static float sliderToAperture(float t) { return fromSlider(t, kMinApertureRadius, kMaxApertureRadius); }
 
-static float focusDistanceToSlider(float focusDistance) {
-    float t = (focusDistance - kMinFocusDistance) / (kMaxFocusDistance - kMinFocusDistance);
-    if (t < 0.f) t = 0.f;
-    if (t > 1.f) t = 1.f;
-    return t;
-}
-
-static float sliderToFocusDistance(float t) {
-    if (t < 0.f) t = 0.f;
-    if (t > 1.f) t = 1.f;
-    return kMinFocusDistance + t * (kMaxFocusDistance - kMinFocusDistance);
-}
-
-static float apertureToSlider(float apertureRadius) {
-    float t = (apertureRadius - kMinApertureRadius) / (kMaxApertureRadius - kMinApertureRadius);
-    if (t < 0.f) t = 0.f;
-    if (t > 1.f) t = 1.f;
-    return t;
-}
-
-static float sliderToAperture(float t) {
-    if (t < 0.f) t = 0.f;
-    if (t > 1.f) t = 1.f;
-    return kMinApertureRadius + t * (kMaxApertureRadius - kMinApertureRadius);
-}
-
-FutabaScreen::FutabaScreen(int width, int height)
+FutabaScreen::FutabaScreen(int width, int height, const std::string& initialScenePath)
     : Screen(nanogui::Vector2i(width, height), "Futaba Renderer") {
     cudaSetDevice(0);
     glfwGetFramebufferSize(glfwWindow(), &m_renderWidth, &m_renderHeight);
@@ -72,16 +40,12 @@ FutabaScreen::FutabaScreen(int width, int height)
     GLFWwindow *win = glfwWindow();
     GLFWimage images[1];
     int img_w, img_h, img_channels;
-    
-    unsigned char* pixels = stbi_load(FUTABA_SOURCE_ROOT "/assets/futaba-window.png", &img_w, &img_h, &img_channels, 4);
-    if (!pixels) {
-        pixels = stbi_load(FUTABA_SOURCE_ROOT "/assets/window.png", &img_w, &img_h, &img_channels, 4);
-    }
-    if (!pixels) {
-        pixels = stbi_load("assets/futaba-window.png", &img_w, &img_h, &img_channels, 4);
-    }
-    if (!pixels) {
-        pixels = stbi_load("assets/window.png", &img_w, &img_h, &img_channels, 4);
+    unsigned char* pixels = nullptr;
+    for (const char* path : { FUTABA_SOURCE_ROOT "/assets/futaba-window.png",
+                              FUTABA_SOURCE_ROOT "/assets/window.png",
+                              "assets/futaba-window.png",
+                              "assets/window.png" }) {
+        if ((pixels = stbi_load(path, &img_w, &img_h, &img_channels, 4))) break;
     }
     
     if (pixels) {
@@ -199,6 +163,12 @@ FutabaScreen::FutabaScreen(int width, int height)
         m_film->clear();
     });
 
+    new Label(settingsGrid, "Path Guiding", "sans-bold");
+
+    m_guiding.renderUI(settingsGrid, m_settingsWindow,
+        [this] { m_film->clear(); },
+        [this] { m_trainRequested = true; });
+
     m_integratorSettingsWindow = new Window(this, "Integrator Settings");
     m_integratorSettingsWindow->setPosition(nanogui::Vector2i(245, 15));
     m_integratorSettingsWindow->setLayout(new GroupLayout(10, 5, 5, 5));
@@ -232,6 +202,23 @@ FutabaScreen::FutabaScreen(int width, int height)
         m_film->clear();
     });
 
+    auto createSliderControl = [&](Widget* parent, const std::string& title, float val, auto toS, auto fromS, auto setVal) -> Slider* {
+        new Label(parent, title, "sans-bold");
+        Widget *panel = new Widget(parent);
+        panel->setLayout(new BoxLayout(Orientation::Horizontal, Alignment::Middle, 0, 10));
+        Slider *slider = new Slider(panel);
+        slider->setValue(toS(val));
+        slider->setFixedWidth(100);
+        Label *valLabel = new Label(panel, std::to_string(val));
+        slider->setCallback([this, fromS, setVal, valLabel](float t) {
+            float v = fromS(t);
+            setVal(v);
+            valLabel->setCaption(std::to_string(v));
+            updateCamera();
+        });
+        return slider;
+    };
+
     new Label(window, "FOV", "sans-bold");
     m_fovSlider = new Slider(window);
     m_fovSlider->setValue(fovToSlider(m_cameraController.fov()));
@@ -240,31 +227,11 @@ FutabaScreen::FutabaScreen(int width, int height)
         updateCamera();
     });
 
-    new Label(window, "Focus Distance", "sans-bold");
-    Widget *focusPanel = new Widget(window);
-    focusPanel->setLayout(new BoxLayout(Orientation::Horizontal, Alignment::Middle, 0, 10));
-    m_focusSlider = new Slider(focusPanel);
-    m_focusSlider->setValue(focusDistanceToSlider(m_cameraController.focusDistance()));
-    m_focusSlider->setFixedWidth(100);
-    Label *focusVal = new Label(focusPanel, std::to_string(m_cameraController.focusDistance()));
-    m_focusSlider->setCallback([this, focusVal](float value) {
-        m_cameraController.setFocusDistance(sliderToFocusDistance(value));
-        focusVal->setCaption(std::to_string(m_cameraController.focusDistance()));
-        updateCamera();
-    });
+    m_focusSlider = createSliderControl(window, "Focus Distance", m_cameraController.focusDistance(),
+        focusDistanceToSlider, sliderToFocusDistance, [this](float v) { m_cameraController.setFocusDistance(v); });
 
-    new Label(window, "Aperture", "sans-bold");
-    Widget *aperturePanel = new Widget(window);
-    aperturePanel->setLayout(new BoxLayout(Orientation::Horizontal, Alignment::Middle, 0, 10));
-    m_apertureSlider = new Slider(aperturePanel);
-    m_apertureSlider->setValue(apertureToSlider(m_cameraController.apertureRadius()));
-    m_apertureSlider->setFixedWidth(100);
-    Label *apertureVal = new Label(aperturePanel, std::to_string(m_cameraController.apertureRadius()));
-    m_apertureSlider->setCallback([this, apertureVal](float value) {
-        m_cameraController.setApertureRadius(sliderToAperture(value));
-        apertureVal->setCaption(std::to_string(m_cameraController.apertureRadius()));
-        updateCamera();
-    });
+    m_apertureSlider = createSliderControl(window, "Aperture", m_cameraController.apertureRadius(),
+        apertureToSlider, sliderToAperture, [this](float v) { m_cameraController.setApertureRadius(v); });
 
     m_fpsLabel = new Label(window, "FPS: 0.0");
     m_fpsLabel->setFont("sans-bold");
@@ -303,9 +270,14 @@ FutabaScreen::FutabaScreen(int width, int height)
     glGenFramebuffers(1, &m_fbo);
     recreateRenderTargets(m_renderWidth, m_renderHeight);
 
-    buildCornellBox(m_scene);
-    m_scene.use_vertex_normals = m_useVertexNormals;
-    m_scene.use_nee = m_useNEE;
+    if (!initialScenePath.empty()) {
+        loadScene(initialScenePath);
+    } else {
+        buildCornellBox(m_scene);
+        m_scene.use_vertex_normals = m_useVertexNormals;
+        m_scene.use_nee = m_useNEE;
+        m_guiding.setSceneBounds(AABB(m_scene.boundsMin, m_scene.boundsMax));
+    }
 
     if (m_triCountLabel)
         m_triCountLabel->setCaption("Triangles: " + std::to_string(m_scene.triangleCount));
@@ -316,22 +288,49 @@ FutabaScreen::FutabaScreen(int width, int height)
     m_denoiser.init(futaba::getOptixContext(), m_renderWidth, m_renderHeight);
     updateIntegratorUI();
 
-    m_loadingWindow = new Window(this, "OptiX Initialization");
-    m_loadingWindow->setLayout(new BoxLayout(Orientation::Vertical, Alignment::Middle, 20, 15));
-    m_loadingWindow->setFixedWidth(450);
+    m_loadingWindow = new Window(this, "");
+    m_loadingWindow->setLayout(new BoxLayout(Orientation::Vertical, Alignment::Middle, 20, 10));
+    m_loadingWindow->setFixedWidth(500);
 
-    auto* loadingTitle = new Label(m_loadingWindow, "Futaba Path Tracer", "sans-bold");
-    loadingTitle->setFontSize(24);
+    auto* loadingTitle = new Label(m_loadingWindow, "F U T A B A", "sans-bold");
+    loadingTitle->setFontSize(26);
 
-    m_loadingStatusLabel = new Label(m_loadingWindow, "Initializing OptiX Pipeline...");
-    m_loadingStatusLabel->setFontSize(16);
+    auto* loadingSubtitle = new Label(m_loadingWindow, "Physically-Based GPU Path Tracer", "sans");
+    loadingSubtitle->setFontSize(13);
 
-    m_loadingProgressBar = new ProgressBar(m_loadingWindow);
-    m_loadingProgressBar->setFixedWidth(400);
+    // Scene & hardware metadata row
+    Widget* infoRow = new Widget(m_loadingWindow);
+    infoRow->setLayout(new BoxLayout(Orientation::Horizontal, Alignment::Middle, 0, 8));
+
+    std::string scName = initialScenePath.empty() ? "Cornell Box" : fs::path(initialScenePath).stem().string();
+    m_loadingSceneLabel = new Label(infoRow, "Scene: " + scName + " (" + std::to_string(m_scene.triangleCount) + " tris)", "sans");
+    m_loadingSceneLabel->setFontSize(12);
+
+    auto* sepLabel = new Label(infoRow, "|", "sans-bold");
+    sepLabel->setFontSize(12);
+
+    auto* deviceLabel = new Label(infoRow, "NVIDIA OptiX 7 (RT Cores)", "sans");
+    deviceLabel->setFontSize(12);
+
+    // Progress bar + percentage counter
+    Widget* progressRow = new Widget(m_loadingWindow);
+    progressRow->setLayout(new BoxLayout(Orientation::Horizontal, Alignment::Middle, 0, 10));
+
+    m_loadingProgressBar = new ProgressBar(progressRow);
+    m_loadingProgressBar->setFixedWidth(410);
     m_loadingProgressBar->setValue(0.0f);
 
-    m_loadingWindow->setPosition(nanogui::Vector2i((m_renderWidth - 450) / 2, (m_renderHeight - 180) / 2));
+    m_loadingPercentLabel = new Label(progressRow, "0%", "sans-bold");
+    m_loadingPercentLabel->setFontSize(13);
+    m_loadingPercentLabel->setFixedWidth(45);
+
+    // Status description
+    m_loadingStatusLabel = new Label(m_loadingWindow, "Initializing OptiX & CUDA context...", "sans");
+    m_loadingStatusLabel->setFontSize(13);
+    m_loadingStatusLabel->setFixedWidth(460);
+
     performLayout();
+    m_loadingWindow->center();
 
     std::thread compileThread([]() {
         futaba::launch_initial_pipeline_compile();
@@ -376,33 +375,38 @@ bool FutabaScreen::loadScene(const std::string &xmlPath) {
         }
 
         const fs::path sceneDir = fs::path(xmlPath).parent_path();
-        const size_t texCount = std::min(loaded.materials.size(), loaded.materialTexturePaths.size());
-        for (size_t i = 0; i < texCount; ++i) {
-            const std::string& tex = loaded.materialTexturePaths[i];
-            if (tex.empty())
-                continue;
-
-            fs::path texPath = fs::path(tex);
-            if (texPath.is_relative()) {
-                texPath = sceneDir / texPath;
+        auto bindTextures = [&](const std::vector<std::string>& paths, bool sRGB, auto setObj) {
+            const size_t count = std::min(loaded.materials.size(), paths.size());
+            for (size_t i = 0; i < count; ++i) {
+                if (paths[i].empty()) continue;
+                fs::path p = fs::path(paths[i]);
+                if (p.is_relative()) p = sceneDir / p;
+                cudaTextureObject_t tex = m_textureManager.createTexture(p.string(), sRGB);
+                if (tex != 0) setObj(loaded.materials[i], tex);
             }
+        };
 
-            cudaTextureObject_t texObj = m_textureManager.createTexture(texPath.string());
-            if (texObj == 0) {
-                std::cerr << "Warning: failed to bind texture for material " << i
-                          << ": " << texPath.string() << std::endl;
-                continue;
-            }
-
-            loaded.materials[i].texObj = texObj;
-        }
+        bindTextures(loaded.materialTexturePaths, true, [](Material& m, cudaTextureObject_t t) { m.texObj = t; });
+        bindTextures(loaded.materialNormalMapPaths, false, [](Material& m, cudaTextureObject_t t) { m.normalMapTexObj = t; });
 
         m_scene.clear();
         m_scene.load(loaded);
+        m_guiding.setSceneBounds(AABB(m_scene.boundsMin, m_scene.boundsMax));
 
-        m_integratorMode = futaba::INTEGRATOR_PATH;
+        if (loaded.integratorType == "volpath" || !loaded.media.empty()) {
+            m_integratorMode = futaba::INTEGRATOR_VOLPATH;
+        } else {
+            m_integratorMode = futaba::INTEGRATOR_PATH;
+        }
+
         if (m_integratorCombo != nullptr) {
-            m_integratorCombo->setSelectedIndex(m_integratorMode);
+            auto integrators = IntegratorRegistry::getIntegrators();
+            for (size_t i = 0; i < integrators.size(); ++i) {
+                if (integrators[i]->getMode() == m_integratorMode) {
+                    m_integratorCombo->setSelectedIndex((int)i);
+                    break;
+                }
+            }
         }
 
         if (loaded.camera.hasCamera) {
@@ -433,6 +437,29 @@ bool FutabaScreen::loadScene(const std::string &xmlPath) {
     }
 }
 
+futaba::LaunchParams FutabaScreen::populateLaunchParams(uchar4* pboPtr) const {
+    LaunchParams params = {};
+    params.pbo_ptr = pboPtr;
+    params.width = m_renderWidth;
+    params.height = m_renderHeight;
+    params.camera = m_camera;
+    params.scene = m_scene;
+    params.max_depth = m_maxDepth;
+    params.rr_depth = m_rrDepth;
+    params.integrator_mode = m_integratorMode;
+    params.tonemapping_mode = m_tonemappingMode;
+    params.use_antialiasing = m_useAntialiasing;
+    params.denoise.active = m_useDenoiser;
+    params.light_sampler.type = m_lightSamplerType;
+    params.light_sampler.cdf.emitterTriangleCdf = m_scene.emitterTriangleCdf;
+    params.light_sampler.cdf.emissiveTriangleIndices = m_scene.emissiveTriangleIndices;
+    params.light_sampler.cdf.emissiveGlobalToIndex = m_scene.emissiveGlobalToIndex;
+    params.light_sampler.cdf.emissiveTriCount = m_scene.emissiveTriCount;
+    params.light_sampler.cdf.emitterTriangleFuncSum = m_scene.emitterTriangleFuncSum;
+    m_guiding.updateLaunchParams(params);
+    return params;
+}
+
 void FutabaScreen::renderLoop() {
     GLFWwindow *win = glfwWindow();
     double lastTime = glfwGetTime(), lastFrameTime = lastTime;
@@ -454,13 +481,28 @@ void FutabaScreen::renderLoop() {
                 }
 
                 if (m_loadingWindow) {
-                    m_loadingWindow->setPosition(nanogui::Vector2i((m_renderWidth - 450) / 2, (m_renderHeight - 180) / 2));
-                    m_loadingProgressBar->setValue(futaba::g_optixCompileProgress.load());
-                    m_loadingStatusLabel->setCaption(futaba::g_optixCompileStatus.load());
+                    m_loadingWindow->center();
+
+                    float target = futaba::g_optixCompileProgress.load();
+                    // Smoothly lerp towards target progress
+                    m_smoothProgress += (target - m_smoothProgress) * 0.12f;
+                    if (target < 1.0f && m_smoothProgress < target) {
+                        m_smoothProgress += 0.001f;
+                    }
+                    float displayVal = std::min(1.0f, std::max(0.0f, m_smoothProgress));
+                    m_loadingProgressBar->setValue(displayVal);
+
+                    int pct = (int)std::round(displayVal * 100.0f);
+                    if (m_loadingPercentLabel) {
+                        m_loadingPercentLabel->setCaption(std::to_string(std::min(100, pct)) + "%");
+                    }
+                    if (m_loadingStatusLabel) {
+                        m_loadingStatusLabel->setCaption(futaba::g_optixCompileStatus.load());
+                    }
                 }
 
                 glViewport(0, 0, m_renderWidth, m_renderHeight);
-                glClearColor(0.11f, 0.11f, 0.13f, 1.0f);
+                glClearColor(0.09f, 0.09f, 0.11f, 1.0f);
                 glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
                 drawContents();
@@ -474,7 +516,9 @@ void FutabaScreen::renderLoop() {
                 }
                 if (m_mainSettingsWindow) {
                     m_mainSettingsWindow->setVisible(true);
+                    m_mainSettingsWindow->requestFocus();
                 }
+                updateFocus(nullptr);
                 performLayout();
             }
 
@@ -506,29 +550,26 @@ void FutabaScreen::renderLoop() {
             if (moved)
                 updateCamera();
 
-            uchar4 *d_pbo_ptr;
-            size_t num_bytes;
+            uchar4 *d_pbo_ptr = nullptr;
+            size_t num_bytes = 0;
             cudaGraphicsMapResources(1, &m_cudaPboResource, g_pipeline.renderStream);
             cudaGraphicsResourceGetMappedPointer((void **)&d_pbo_ptr, &num_bytes, m_cudaPboResource);
 
-            LaunchParams params = {};
-            params.pbo_ptr = d_pbo_ptr;
-            params.width = m_renderWidth;
-            params.height = m_renderHeight;
-            params.camera = m_camera;
-            params.scene = m_scene;
-            params.max_depth = m_maxDepth;
-            params.rr_depth = m_rrDepth;
-            params.integrator_mode = m_integratorMode;
-            params.tonemapping_mode = m_tonemappingMode;
-            params.use_antialiasing = m_useAntialiasing;
-            params.denoise.active = m_useDenoiser;
-            params.light_sampler.type = m_lightSamplerType;
-            params.light_sampler.cdf.emitterTriangleCdf = m_scene.emitterTriangleCdf;
-            params.light_sampler.cdf.emissiveTriangleIndices = m_scene.emissiveTriangleIndices;
-            params.light_sampler.cdf.emissiveGlobalToIndex = m_scene.emissiveGlobalToIndex;
-            params.light_sampler.cdf.emissiveTriCount = m_scene.emissiveTriCount;
-            params.light_sampler.cdf.emitterTriangleFuncSum = m_scene.emitterTriangleFuncSum;
+            LaunchParams params = populateLaunchParams(d_pbo_ptr);
+
+            // Training pass: capture one frame of path samples into the GPU
+            const bool autoTraining = m_guiding.isTrainingEnabled();
+            const bool capturing = (m_trainRequested || autoTraining) && m_guiding.enabled();
+            if (capturing) {
+                m_trainingBuffers.allocate(m_renderWidth, m_renderHeight, m_maxDepth);
+                m_trainingBuffers.clear();
+                params.guiding.train_active    = m_trainingBuffers.active();
+                params.guiding.train_position  = m_trainingBuffers.position();
+                params.guiding.train_wo        = m_trainingBuffers.wo();
+                params.guiding.train_radiance  = m_trainingBuffers.radiance();
+                params.guiding.train_pdf       = m_trainingBuffers.pdf();
+                params.guiding.train_max_depth = m_maxDepth;
+            }
 
             auto activeInt = IntegratorRegistry::getIntegrator(m_integratorMode);
             if (activeInt) {
@@ -536,6 +577,14 @@ void FutabaScreen::renderLoop() {
             }
 
             launch_render(m_film, &m_denoiser, params);
+
+            if (capturing) {
+                m_guiding.train(m_trainingBuffers, m_maxDepth);
+                if (m_trainRequested) {
+                    m_film->clear();
+                    m_trainRequested = false;
+                }
+            }
 
             cudaGraphicsUnmapResources(1, &m_cudaPboResource, g_pipeline.renderStream);
 

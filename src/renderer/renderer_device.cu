@@ -8,6 +8,8 @@
 #include "launch_params.h"
 #include "normals.cuh"
 #include "path.cuh"
+#include "guided_path.cuh"
+#include "volpath.cuh"
 
 #include "tonemapping.cuh"
 #include "perspective.cuh"
@@ -46,19 +48,12 @@ static __device__ Ray3f setup_ray(uint3 idx, int& index, Sampler& sampler) {
 // kernel's PathRecorder before this function is called, so no intersection
 // work is done here.
 static __device__ void accumulate_and_write(int index, const Color3f& radiance) {
-  Color3f acc = params.film_pixels[index];
-  acc += radiance;
+  Color3f acc = params.film_pixels[index] + radiance;
   params.film_pixels[index] = acc;
 
   if (!params.denoise.active) {
-    Color3f linear_avg  = acc / (float)params.sampleCount;
-    Color3f tonemapped  = tonemap::apply(linear_avg, params.tonemapping_mode);
-    Color3f final_color = toSRGB(tonemapped);
-
-    params.pbo_ptr[index].x = (unsigned char)clamp(final_color.x * 255.f, 0.f, 255.f);
-    params.pbo_ptr[index].y = (unsigned char)clamp(final_color.y * 255.f, 0.f, 255.f);
-    params.pbo_ptr[index].z = (unsigned char)clamp(final_color.z * 255.f, 0.f, 255.f);
-    params.pbo_ptr[index].w = 255;
+    Color3f linear_avg = acc / (float)params.sampleCount;
+    params.pbo_ptr[index] = tonemap::pack_to_uchar4(linear_avg, params.tonemapping_mode);
   }
 }
 
@@ -122,19 +117,34 @@ extern "C" __global__ void __raygen__path() {
   Ray3f ray = setup_ray(idx, index, sampler);
 
   EmitterSampler light_sampler(params.light_sampler);
-  Path integrator(params.max_depth, params.rr_depth, light_sampler);
 
-  PathRecorder recorder;
-  bool recording = params.denoise.active && params.denoise.albedo_buffer && params.denoise.normal_buffer;
-  if (recording) {
-    recorder.albedo_buffer = params.denoise.albedo_buffer;
-    recorder.normal_buffer = params.denoise.normal_buffer;
-    recorder.pixel_index   = index;
-    recorder.sample_count  = params.sampleCount;
-    recorder.camera        = &params.camera;
+  Color3f radiance;
+  if (params.integrator_mode == INTEGRATOR_VOLPATH) {
+    VolPath integrator(params.max_depth, params.rr_depth, light_sampler);
+    radiance = integrator.sample(ray, params.scene, sampler);
+  } else {
+    PathRecorder recorder;
+    bool recording = params.denoise.active && params.denoise.albedo_buffer && params.denoise.normal_buffer;
+    if (recording) {
+      recorder.albedo_buffer = params.denoise.albedo_buffer;
+      recorder.normal_buffer = params.denoise.normal_buffer;
+      recorder.pixel_index   = index;
+      recorder.sample_count  = params.sampleCount;
+      recorder.camera        = &params.camera;
+    }
+
+    const bool capturing = (params.guiding.train_active != nullptr && index >= 0);
+    const bool guided    = (params.guiding.active && params.guiding.type != GuidingType::None);
+
+    if (capturing || guided) {
+      GuidedPath integrator(params.max_depth, params.rr_depth, light_sampler);
+      radiance = integrator.sample(ray, params.scene, sampler, recording ? &recorder : nullptr,
+                                   params.guiding, index);
+    } else {
+      Path integrator(params.max_depth, params.rr_depth, light_sampler);
+      radiance = integrator.sample(ray, params.scene, sampler, recording ? &recorder : nullptr);
+    }
   }
-
-  Color3f radiance = integrator.sample(ray, params.scene, sampler, recording ? &recorder : nullptr);
 
   accumulate_and_write(index, radiance);
 }
@@ -145,7 +155,7 @@ extern "C" __global__ void __closesthit__ch() {
 
   unsigned long long packed = (static_cast<unsigned long long>(p1) << 32) |
                               static_cast<unsigned long long>(p0);
-  SurfaceIntersection *rec = reinterpret_cast<SurfaceIntersection *>(packed);
+  SurfaceInteraction *rec = reinterpret_cast<SurfaceInteraction *>(packed);
 
   unsigned int primIdx = optixGetPrimitiveIndex();
   const Triangle &tri = params.scene.triangles[primIdx];
@@ -173,12 +183,14 @@ extern "C" __global__ void __anyhit__shadow() {
 
   if (tri.mesh_id == (int)target_mesh_id) {
     optixIgnoreIntersection();
+    return;
   }
 
   if (tri.material_id >= 0 && tri.material_id < (int)params.scene.materialCount) {
     int mat_type = params.scene.materials[tri.material_id].type;
     if (futaba::Material::isShadowTransparent((futaba::BSDFType)mat_type)) {
       optixIgnoreIntersection();
+      return;
     }
   }
 

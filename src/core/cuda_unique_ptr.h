@@ -3,10 +3,7 @@
 
 FUTABA_NAMESPACE_BEGIN
 
-/**
- * @brief RAII smart pointer wrapper for CUDA device memory.
- * Automatically deallocates device memory when going out of scope.
- */
+// RAII smart pointer for CUDA device memory
 template <typename T>
 class CudaUniquePtr {
 private:

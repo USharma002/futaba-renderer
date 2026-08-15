@@ -28,7 +28,7 @@ HD Color3f faceColorFromId(int primitiveId) {
 struct Primitives {
   // Visualizes each face with a stable pseudo-random color for debugging.
   HD Color3f sample(const Ray &ray, const Scene &scene, Sampler &) const {
-    SurfaceIntersection si;
+    SurfaceInteraction si;
     if (!scene.intersect(ray, ray.mint, ray.maxt, si)) {
       return Color3f(0.0f);
     }
@@ -41,18 +41,4 @@ struct Primitives {
   }
 };
 FUTABA_NAMESPACE_END
-
-#if !defined(__CUDACC__) && defined(NANOGUI_GLAD)
-#include "integrator_ui.h"
-
-FUTABA_NAMESPACE_BEGIN
-
-class PrimitivesIntegratorUI : public IntegratorUI {
-public:
-    std::string getName() const override { return "Primitives"; }
-    int getMode() const override { return INTEGRATOR_PRIMITIVES; }
-};
-
-FUTABA_NAMESPACE_END
-#endif
 

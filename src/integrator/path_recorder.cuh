@@ -10,15 +10,7 @@
 
 FUTABA_NAMESPACE_BEGIN
 
-// Sidecar object the path integrator reports intersections to, at every
-// bounce. It owns the buffers it writes into and decides on its own what
-// (if anything) is worth recording — the integrator doesn't need to know
-// what's being collected or why.
-//
-// Currently only fills the denoiser's albedo/normal guide buffers at the
-// first bounce. If we later want to grab more data (a training buffer,
-// bounce statistics, etc.), it belongs here as another field + branch in
-// record(), not as new params threaded through Path::sample.
+// Records first-bounce albedo and normal guide buffers for the OptiX AI Denoiser
 struct PathRecorder {
     Color3f* albedo_buffer = nullptr;
     Color3f* normal_buffer = nullptr;
@@ -26,7 +18,7 @@ struct PathRecorder {
     int      sample_count  = 1;
     const PerspectiveCamera* camera = nullptr;
 
-    HD void record(int depth, bool hit, const SurfaceIntersection& si,
+    HD void record(int depth, bool hit, const SurfaceInteraction& si,
                    const Ray& current_ray, const Scene& scene) const
     {
         if (depth != 0 || !albedo_buffer || !normal_buffer)

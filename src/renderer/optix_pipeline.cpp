@@ -113,12 +113,12 @@ void OptixPipelineManager::init() {
     }
     
     futaba::g_optixCompileProgress = 0.05f;
-    futaba::g_optixCompileStatus = "Initializing OptiX context...";
+    futaba::g_optixCompileStatus = "Initializing OptiX & CUDA context...";
     futaba::initOptix();
     OptixDeviceContext context = futaba::getOptixContext();
 
-    // 1. Pipeline Compile Options
-    futaba::g_optixCompileProgress = 0.10f;
+    // Pipeline compile options
+    futaba::g_optixCompileProgress = 0.12f;
     futaba::g_optixCompileStatus = "Configuring pipeline options...";
     OptixPipelineCompileOptions pipelineCompileOptions = {};
     pipelineCompileOptions.usesMotionBlur = false;
@@ -130,13 +130,13 @@ void OptixPipelineManager::init() {
     pipelineCompileOptions.pipelineLaunchParamsVariableName = "params_buffer";
 
     OptixModuleCompileOptions moduleCompileOptions = {};
-    moduleCompileOptions.maxRegisterCount = 50;
+    moduleCompileOptions.maxRegisterCount = OPTIX_COMPILE_DEFAULT_MAX_REGISTER_COUNT;
     moduleCompileOptions.optLevel = OPTIX_COMPILE_OPTIMIZATION_DEFAULT;
     moduleCompileOptions.debugLevel = OPTIX_COMPILE_DEBUG_LEVEL_NONE;
 
-    // 2. Load PTX
-    futaba::g_optixCompileProgress = 0.15f;
-    futaba::g_optixCompileStatus = "Loading PTX code...";
+    // Load PTX bytecode
+    futaba::g_optixCompileProgress = 0.18f;
+    futaba::g_optixCompileStatus = "Loading PTX bytecode...";
     FILE *fp = fopen(PTX_FILE_PATH, "rb");
     if (!fp) {
       std::cerr << "Failed to open PTX file: " << PTX_FILE_PATH << std::endl;
@@ -152,50 +152,41 @@ void OptixPipelineManager::init() {
     char log[8192];
     size_t sizeof_log = sizeof(log);
 
-    futaba::g_optixCompileProgress = 0.20f;
-    futaba::g_optixCompileStatus = "Compiling OptiX device module...";
+    futaba::g_optixCompileProgress = 0.25f;
+    futaba::g_optixCompileStatus = "Compiling OptiX PTX device module (RT Cores)...";
     OPTIX_CHECK_LOG(optixModuleCreate(context, &moduleCompileOptions, &pipelineCompileOptions,
                                       ptxCode.data(), ptxSize, log, &sizeof_log, &module),
                     log);
 
-    // 3. Program Groups
+    // Program groups
     OptixProgramGroupOptions pgOptions = {};
 
-    futaba::g_optixCompileProgress = 0.35f;
-    futaba::g_optixCompileStatus = "Creating shader programs (1/6)...";
+    futaba::g_optixCompileProgress = 0.50f;
+    futaba::g_optixCompileStatus = "Creating ray generation & hit programs...";
     OptixProgramGroup raygenProgGroupRender =
         createRaygenPG(context, module, "__raygen__render", pgOptions, log, sizeof(log));
 
-    futaba::g_optixCompileProgress = 0.40f;
-    futaba::g_optixCompileStatus = "Creating shader programs (2/6)...";
     OptixProgramGroup raygenProgGroupPath =
         createRaygenPG(context, module, "__raygen__path", pgOptions, log, sizeof(log));
 
-    futaba::g_optixCompileProgress = 0.50f;
-    futaba::g_optixCompileStatus = "Creating shader programs (3/6)...";
     OptixProgramGroup missProgGroup =
         createMissPG(context, module, "__miss__ms", pgOptions, log, sizeof(log));
 
-    futaba::g_optixCompileProgress = 0.60f;
-    futaba::g_optixCompileStatus = "Creating shader programs (4/6)...";
     OptixProgramGroup hitProgGroup =
         createHitgroupPG(context, module, "__closesthit__ch", nullptr, pgOptions, log, sizeof(log));
 
-    // Shadow miss
+    // Shadow miss & hit
     futaba::g_optixCompileProgress = 0.70f;
-    futaba::g_optixCompileStatus = "Creating shader programs (5/6)...";
+    futaba::g_optixCompileStatus = "Creating shadow & miss shader programs...";
     OptixProgramGroup shadowMissProgGroup =
         createMissPG(context, module, "__miss__shadow", pgOptions, log, sizeof(log));
 
-    // Shadow hit (anyhit only, no closest-hit)
-    futaba::g_optixCompileProgress = 0.80f;
-    futaba::g_optixCompileStatus = "Creating shader programs (6/6)...";
     OptixProgramGroup shadowHitProgGroup =
         createHitgroupPG(context, module, nullptr, "__anyhit__shadow", pgOptions, log, sizeof(log));
 
-    // 4. Create Pipeline
-    futaba::g_optixCompileProgress = 0.90f;
-    futaba::g_optixCompileStatus = "Linking pipeline...";
+    // Create OptiX pipeline
+    futaba::g_optixCompileProgress = 0.85f;
+    futaba::g_optixCompileStatus = "Linking OptiX rendering pipeline...";
     OptixProgramGroup programGroups[] = {raygenProgGroupRender,
                                          raygenProgGroupPath,
                                          missProgGroup,
@@ -210,7 +201,7 @@ void OptixPipelineManager::init() {
                                         programGroups, 6, log, &sizeof_log, &pipeline),
                     log);
 
-    // 5. Build SBT
+    // Build Shader Binding Table (SBT)
     futaba::g_optixCompileProgress = 0.95f;
     futaba::g_optixCompileStatus = "Building Shader Binding Table (SBT)...";
 
@@ -219,7 +210,9 @@ void OptixPipelineManager::init() {
     optixSbtRecordPackHeader(raygenProgGroupRender, &raygenRecords[0]);
     optixSbtRecordPackHeader(raygenProgGroupPath, &raygenRecords[1]);
     d_raygenRecordsBase.reset(reinterpret_cast<char *>(uploadSbtRecords(raygenRecords)));
-    sbt.raygenRecord = reinterpret_cast<CUdeviceptr>(d_raygenRecordsBase.get());
+    raygenRecordRender = reinterpret_cast<CUdeviceptr>(d_raygenRecordsBase.get());
+    raygenRecordPath   = reinterpret_cast<CUdeviceptr>(d_raygenRecordsBase.get() + sizeof(EmptyRecord));
+    sbt.raygenRecord   = raygenRecordRender;
 
     // Miss Records
     std::vector<EmptyRecord> missRecords(2);
@@ -253,7 +246,7 @@ void OptixPipelineManager::init() {
     optixProgramGroupDestroy(shadowHitProgGroup);
 
     futaba::g_optixCompileProgress = 1.00f;
-    futaba::g_optixCompileStatus = "Completed";
+    futaba::g_optixCompileStatus = "Initialization complete";
     futaba::g_optixCompileCompleted = true;
 }
 

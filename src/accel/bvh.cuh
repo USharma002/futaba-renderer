@@ -174,7 +174,7 @@ struct BVH {
                       float tMin,
                       float tMax,
                       const Triangle* __restrict__ triangles, // __restrict__ uses fast L1 texture cache
-                      SurfaceIntersection& rec,
+                      SurfaceInteraction& rec,
                       bool use_vertex_normals) const {
 #if defined(FUTABA_OPTIX_DEVICE_PROGRAMS) && FUTABA_USE_OPTIX
         if (traversable == 0) {
@@ -208,6 +208,7 @@ struct BVH {
             return false;
         }
 
+        Vector3f dRcp(1.0f / ray.d.x, 1.0f / ray.d.y, 1.0f / ray.d.z);
         bool hit = false;
         float closest = tMax;
 
@@ -215,7 +216,7 @@ struct BVH {
         int stackSize = 0;
 
         float dummyDist;
-        if (!bvhNodes[0].bounds.intersectDist(ray, tMin, closest, dummyDist)) {
+        if (!bvhNodes[0].bounds.intersectDist(ray, dRcp, tMin, closest, dummyDist)) {
             return false;
         }
 
@@ -230,7 +231,7 @@ struct BVH {
             if (node.isLeaf()) {
                 for (int i = 0; i < node.triCount; ++i) {
                     int triIdx = bvhTriIndices[node.leftFirst + i];
-                    SurfaceIntersection tmp;
+                    SurfaceInteraction tmp;
                     if (triangles[triIdx].intersect(ray, tMin, closest, tmp, use_vertex_normals, triIdx)) {
                         hit = true;
                         closest = tmp.t;
@@ -242,8 +243,8 @@ struct BVH {
                 int rightIdx = leftIdx + 1;
 
                 float distLeft, distRight;
-                bool hitLeft = bvhNodes[leftIdx].bounds.intersectDist(ray, tMin, closest, distLeft);
-                bool hitRight = bvhNodes[rightIdx].bounds.intersectDist(ray, tMin, closest, distRight);
+                bool hitLeft = bvhNodes[leftIdx].bounds.intersectDist(ray, dRcp, tMin, closest, distLeft);
+                bool hitRight = bvhNodes[rightIdx].bounds.intersectDist(ray, dRcp, tMin, closest, distRight);
 
                 if (hitLeft && hitRight) {
                     if (stackSize + 2 <= kMaxTraversalStackSize) {
@@ -301,11 +302,12 @@ struct BVH {
             return false;
         }
 
+        Vector3f dRcp(1.0f / ray.d.x, 1.0f / ray.d.y, 1.0f / ray.d.z);
         int stack[kMaxTraversalStackSize];
         int stackSize = 0;
 
         float dummyDist;
-        if (!bvhNodes[0].bounds.intersectDist(ray, tMin, tMax, dummyDist)) {
+        if (!bvhNodes[0].bounds.intersectDist(ray, dRcp, tMin, tMax, dummyDist)) {
             return false;
         }
 
@@ -330,7 +332,7 @@ struct BVH {
                             continue;
                         }
                     }
-                    SurfaceIntersection tmp;
+                    SurfaceInteraction tmp;
                     if (tri.intersect(ray, tMin, tMax, tmp, false, triIdx)) {
                         return true;
                     }
@@ -340,8 +342,8 @@ struct BVH {
                 int rightIdx = leftIdx + 1;
 
                 float distLeft, distRight;
-                bool hitLeft = bvhNodes[leftIdx].bounds.intersectDist(ray, tMin, tMax, distLeft);
-                bool hitRight = bvhNodes[rightIdx].bounds.intersectDist(ray, tMin, tMax, distRight);
+                bool hitLeft = bvhNodes[leftIdx].bounds.intersectDist(ray, dRcp, tMin, tMax, distLeft);
+                bool hitRight = bvhNodes[rightIdx].bounds.intersectDist(ray, dRcp, tMin, tMax, distRight);
 
                 if (hitLeft && hitRight) {
                     if (stackSize + 2 <= kMaxTraversalStackSize) {
@@ -373,6 +375,7 @@ struct BVH {
             return 0;
         }
 
+        Vector3f dRcp(1.0f / ray.d.x, 1.0f / ray.d.y, 1.0f / ray.d.z);
         int aabb_tests = 0;
 
         int stack[kMaxTraversalStackSize];
@@ -380,7 +383,7 @@ struct BVH {
 
         float dummyDist;
         aabb_tests++;
-        if (!bvhNodes[0].bounds.intersectDist(ray, tMin, tMax, dummyDist)) {
+        if (!bvhNodes[0].bounds.intersectDist(ray, dRcp, tMin, tMax, dummyDist)) {
             return aabb_tests;
         }
 
@@ -398,8 +401,8 @@ struct BVH {
 
                 float distLeft, distRight;
                 aabb_tests += 2;
-                bool hitLeft = bvhNodes[leftIdx].bounds.intersectDist(ray, tMin, tMax, distLeft);
-                bool hitRight = bvhNodes[rightIdx].bounds.intersectDist(ray, tMin, tMax, distRight);
+                bool hitLeft = bvhNodes[leftIdx].bounds.intersectDist(ray, dRcp, tMin, tMax, distLeft);
+                bool hitRight = bvhNodes[rightIdx].bounds.intersectDist(ray, dRcp, tMin, tMax, distRight);
 
                 if (hitLeft && hitRight) {
                     if (stackSize + 2 <= kMaxTraversalStackSize) {

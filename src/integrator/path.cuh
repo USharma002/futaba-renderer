@@ -12,34 +12,32 @@
 FUTABA_NAMESPACE_BEGIN
 
 struct Path {
-    int             max_depth;
-    int             rr_depth;
+    int            max_depth;
+    int            rr_depth;
     EmitterSampler emitter_sampler;
 
     HD explicit Path(int max_d = 12, int rr_d = 5, EmitterSampler sampler = EmitterSampler())
         : max_depth(max_d), rr_depth(rr_d), emitter_sampler(sampler) {}
 
-    // recorder is optional: pass nullptr and nothing extra is ever touched.
     HD Color3f sample(const Ray& ray, const Scene& scene, Sampler& sampler,
                       const PathRecorder* recorder = nullptr) const
     {
+        Ray     current_ray = ray;
         Color3f L(0.f), beta(1.f);
         float   eta = 1.f;
-        Ray     current_ray = ray;
 
+        Point3f prev_p          = ray.o;
         float   prev_bsdf_pdf   = 1.f;
         bool    prev_bsdf_delta = true;
-        Point3f prev_p          = ray.o;
 
         for (int depth = 0; depth < max_depth; ++depth) {
-            SurfaceIntersection si;
+            SurfaceInteraction si;
             bool hit = scene.intersect(current_ray, current_ray.mint, current_ray.maxt, si);
 
             if (recorder)
                 recorder->record(depth, hit, si, current_ray, scene);
 
-            // ---------------------- Direct emission ----------------------
-
+            // ------------------ Direct Emission with MIS ------------------
             Color3f Le = emitter_sampler.eval_direct_emission(scene, si, hit, current_ray, prev_p, prev_bsdf_pdf, prev_bsdf_delta);
             L += beta * Le;
 
@@ -47,53 +45,48 @@ struct Path {
                 break;
 
             const Material& mat = scene.materials[si.material_id];
+            const bool scatterable = !BSDF::is_delta(mat.type) && mat.type != BSDF_ID_NULL;
 
-            // ---------------------- Emitter sampling ----------------------
-            // Mirrors the reference structure: sample a light (material-free),
-            // then evaluate what THIS surface's BSDF does with that direction,
-            // then combine. The emitter sampler never sees `mat` -- see
-            // nee_contribution() in emitter_sampler.cuh.
-
-            if (scene.use_nee && !BSDF::is_delta(mat.type) && mat.type != BSDF_ID_NULL) {
-                EmitterSample es;
+            // ------------------ Emitter Sampling (NEE) -------------------
+            if (scene.use_nee && scatterable) {
+                DirectionSample ds;
+                Color3f em_weight;
                 Point3f u3(sampler.next1D(), sampler.next1D(), sampler.next1D());
-                if (emitter_sampler.sample(scene, si, u3, es) && es.pdf > 0.f) {
-                    Vector3f wo_local = si.to_local(es.d);
-                    float cos_theta = wo_local.z;
+
+                if (emitter_sampler.sample_direction(scene, si, u3, ds, em_weight)) {
+                    Vector3f wo_local = si.to_local(ds.d);
+                    float cos_theta = Frame::cos_theta(wo_local);
+
                     if (cos_theta > 0.f) {
                         Color3f f_bsdf;
                         float bsdf_pdf = 0.f;
                         BSDF::eval_pdf(mat, si, wo_local, f_bsdf, bsdf_pdf);
-                        L += beta * nee_contribution(scene, si.spawn_ray(es.d), es.dist - 1e-4f,
-                                                     es.mesh_id, es, f_bsdf, bsdf_pdf, cos_theta);
+
+                        Color3f nee = nee_contribution(scene, si.spawn_ray(ds.d), ds.dist - 1e-4f,
+                                                       ds.mesh_id, ds, f_bsdf, bsdf_pdf, cos_theta);
+                        L += beta * nee;
                     }
                 }
             }
 
-            // ------------------------ BSDF sampling -----------------------
-
+            // --------------------- BSDF Sampling -------------------------
             BSDFSample bs;
             Color3f bsdf_w = BSDF::sample(mat, si, bs, sampler.next2D());
-
-            if (!bs.is_valid()) {
+            if (!bs.is_valid())
                 break;
-            }
 
-            // ---- Update loop variables based on current interaction -----
-
+            // ---- Update loop variables based on current interaction ----
             beta *= bsdf_w;
             eta  *= bs.eta;
 
-            // -------------------- Stopping criterion ---------------------
-
-            const float max_beta = fmaxf(beta.x, fmaxf(beta.y, beta.z));
+            // ------------------- Stopping Criterion --------------------
+            const float max_beta = beta.maxComponent();
             if (max_beta <= 0.f) break;
 
-            // Russian roulette stopping probability
             if (depth >= rr_depth) {
-                const float rr_prob = fminf(max_beta / (eta * eta), 0.95f);
+                const float rr_prob = fminf(fmaxf(max_beta / (eta * eta), 0.05f), 0.95f);
                 if (sampler.next1D() >= rr_prob) break;
-                beta = beta / rr_prob;
+                beta /= rr_prob;
             }
 
             prev_p          = si.p;
@@ -109,18 +102,3 @@ struct Path {
 using PathIntegrator = Path;
 
 FUTABA_NAMESPACE_END
-
-
-#if !defined(__CUDACC__) && defined(NANOGUI_GLAD)
-#include "integrator_ui.h"
-
-FUTABA_NAMESPACE_BEGIN
-
-class PathIntegratorUI : public IntegratorUI {
-public:
-    std::string getName() const override { return "Path"; }
-    int getMode() const override { return INTEGRATOR_PATH; }
-};
-
-FUTABA_NAMESPACE_END
-#endif

@@ -1,14 +1,15 @@
 #pragma once
 
-#include <cstring>
-#include "bsdf_sample.cuh"
+#include "types.cuh"
+#include "common.cuh"
 #include "warp.cuh"
 #include "frame.cuh"
-#include "common.cuh"
-#include "sampler.cuh"
+#include "material.cuh"
+#include "bsdf_sample.cuh"
 
 FUTABA_NAMESPACE_BEGIN
 
+// Physically accurate rough dielectric model with microfacet reflection and refraction (Walter et al. 2007)
 struct RoughDielectric {
     Color3f albedo;
     float   alpha;
@@ -81,7 +82,7 @@ struct RoughDielectric {
             if (cosThetaO <= 0.f) return 0.f;
             wh = normalize(bs.wi + bs.wo);
         } else {
-            if (cosThetaO >= 0.f) return 0.f;
+            if (cosThetaO >= 0.f) return Color3f(0.f).x;
             wh = normalize(bs.wi * etaI + bs.wo * etaT);
             if (Frame::cos_theta(wh) < 0.f) wh = -wh;
         }
@@ -102,46 +103,91 @@ struct RoughDielectric {
         }
     }
 
+    HD void eval_pdf(const BSDFSample& bs, Color3f& f_out, float& pdf_out) const {
+        const float cosThetaI = Frame::cos_theta(bs.wi);
+        const float cosThetaO = Frame::cos_theta(bs.wo);
+        if (cosThetaI <= 0.f) {
+            f_out   = Color3f(0.f);
+            pdf_out = 0.f;
+            return;
+        }
+
+        const bool reflect = cosThetaO > 0.f;
+        float etaI = bs.front_face ? extIOR : intIOR;
+        float etaT = bs.front_face ? intIOR : extIOR;
+
+        Vector3f wh;
+        if (reflect) {
+            wh = normalize(bs.wi + bs.wo);
+        } else {
+            wh = normalize(bs.wi * etaI + bs.wo * etaT);
+            if (Frame::cos_theta(wh) < 0.f) wh = -wh;
+        }
+
+        const float whDotWi = dot(wh, bs.wi);
+        if (whDotWi <= 0.f) {
+            f_out   = Color3f(0.f);
+            pdf_out = 0.f;
+            return;
+        }
+
+        const float D = Warp::beckmannD(wh, alpha);
+        if (D <= 0.f) {
+            f_out   = Color3f(0.f);
+            pdf_out = 0.f;
+            return;
+        }
+
+        const float cosThetaH = Frame::cos_theta(wh);
+        const float pWh = D * cosThetaH;
+        const float F   = fresnel(whDotWi, etaI, etaT);
+        const float G   = G1(bs.wi, wh, alpha) * G1(bs.wo, wh, alpha);
+
+        if (reflect) {
+            f_out   = albedo * Color3f(F * D * G / fmaxf(4.f * cosThetaI * cosThetaO, 1e-8f));
+            pdf_out = F * pWh / fmaxf(4.f * whDotWi, 1e-8f);
+        } else {
+            const float whDotWo = dot(wh, bs.wo);
+            const float denom   = etaI * whDotWi + etaT * whDotWo;
+            const float denom2  = fmaxf(denom * denom, 1e-8f);
+            const float factor  = (etaI * etaI * fabsf(whDotWi) * fabsf(whDotWo)) /
+                                  fmaxf(denom2 * cosThetaI * fabsf(cosThetaO), 1e-8f);
+            f_out   = albedo * Color3f((1.f - F) * D * G * factor);
+            const float dwh_dwo = (etaT * etaT * fabsf(whDotWo)) / denom2;
+            pdf_out = (1.f - F) * pWh * dwh_dwo;
+        }
+    }
+
     HD Color3f sample(BSDFSample& bs, const Point2f& s2) const {
         const float cosThetaI = Frame::cos_theta(bs.wi);
         if (cosThetaI <= 0.f) {
             bs.pdf = 0.f; bs.weight = Color3f(0.f); return Color3f(0.f);
         }
 
-        const Vector3f wh     = Warp::squareToBeckmann(s2, alpha);
-        const float whDotWi   = dot(bs.wi, wh);
+        float etaI = bs.front_face ? extIOR : intIOR;
+        float etaT = bs.front_face ? intIOR : extIOR;
+        float eta  = etaI / etaT;
+
+        // Sample microfacet normal wh from Beckmann distribution
+        const Vector3f wh   = Warp::squareToBeckmann(s2, alpha);
+        const float whDotWi = dot(bs.wi, wh);
         if (whDotWi <= 0.f) {
             bs.pdf = 0.f; bs.weight = Color3f(0.f); return Color3f(0.f);
         }
 
-        float etaI     = bs.front_face ? extIOR : intIOR;
-        float etaT     = bs.front_face ? intIOR : extIOR;
-        const float F  = fresnel(whDotWi, etaI, etaT);
-        float eta      = etaI / etaT;
-
+        const float F = fresnel(whDotWi, etaI, etaT);
         const float sinT2 = eta * eta * fmaxf(0.f, 1.f - whDotWi * whDotWi);
         const bool  tir   = (sinT2 >= 1.f);
 
-        // Derive an extra decorrelated 1D sample from s2 for the reflect/
-        // refract decision (BSDF::sample only threads a 2D sample through,
-        // and both components are already spent on the microfacet normal).
-        // memcpy (not a union) avoids type-punning UB for the float->bits read.
-        uint32_t bits_x, bits_y;
-        std::memcpy(&bits_x, &s2.x, sizeof(float));
-        std::memcpy(&bits_y, &s2.y, sizeof(float));
-        const uint64_t seed = (static_cast<uint64_t>(bits_x) << 32) | bits_y;
-        pcg32 rng(seed);
-        const float sample1 = rng.nextFloat();
-
-        bool sample_reflect = tir || (sample1 <= F);
+        // Stratified reflection / refraction partition
+        bool sample_reflect = tir || (fresnel(cosThetaI, etaI, etaT) > 0.5f ? (s2.x < F) : (s2.y < F));
 
         if (sample_reflect) {
-            // Reflect (includes TIR)
+            // Reflect
             bs.wo = -bs.wi + 2.f * whDotWi * wh;
             if (Frame::cos_theta(bs.wo) <= 0.f) {
                 bs.pdf = 0.f; bs.weight = Color3f(0.f); return Color3f(0.f);
             }
-            bs.pdf          = F * Warp::squareToBeckmannPdf(wh, alpha) / fmaxf(4.f * whDotWi, 1e-8f);
             bs.eta          = 1.f;
             bs.sampled_type = BSDF_ID_ROUGHDIELECTRIC;
         } else {
@@ -151,20 +197,19 @@ struct RoughDielectric {
             if (Frame::cos_theta(bs.wo) >= 0.f) {
                 bs.pdf = 0.f; bs.weight = Color3f(0.f); return Color3f(0.f);
             }
-            const float whDotWo = dot(wh, bs.wo);
-            const float denom   = etaI * whDotWi + etaT * whDotWo;
-            const float dwh_dwo = (etaT * etaT * fabsf(whDotWo)) / fmaxf(denom * denom, 1e-8f);
-            bs.pdf          = (1.f - F) * Warp::squareToBeckmannPdf(wh, alpha) * dwh_dwo;
             bs.eta          = eta;
             bs.sampled_type = BSDF_ID_ROUGHDIELECTRIC;
         }
 
+        Color3f f;
+        eval_pdf(bs, f, bs.pdf);
         if (bs.pdf <= 0.f) {
-            bs.weight = Color3f(0.f); return Color3f(0.f);
+            bs.weight = Color3f(0.f);
+            return Color3f(0.f);
         }
 
         const float cosO = fabsf(Frame::cos_theta(bs.wo));
-        bs.weight = eval(bs) * (cosO / bs.pdf);
+        bs.weight = f * (cosO / bs.pdf);
         return bs.weight;
     }
 };

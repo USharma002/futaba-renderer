@@ -13,7 +13,7 @@ struct Frame {
   HD explicit Frame(const Vector3f &normal) { setFromNormal(normal); }
 
   HD void setFromNormal(const Vector3f &normal) {
-    n = normalize(normal);
+    n = normal;
     float sign = (n.z >= 0.0f) ? 1.0f : -1.0f;
     float a = -1.0f / (sign + n.z);
     float b = n.x * n.y * a;

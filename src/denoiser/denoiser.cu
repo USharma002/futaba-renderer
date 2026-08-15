@@ -23,15 +23,15 @@ __global__ void prepare_denoiser_input_kernel(
     int idx = y * width + x;
     float inv_s = 1.0f / (float)sampleCount;
 
-    // 1. Beauty (RGB)
+    // Beauty buffer
     Color3f b = film_pixels[idx] * inv_s;
     input_beauty[idx] = make_float4(b.x, b.y, b.z, 1.0f);
 
-    // 2. Albedo (RGB)
+    // Albedo guide buffer
     Color3f a = albedo_buffer[idx] * inv_s;
     input_albedo[idx] = make_float4(a.x, a.y, a.z, 1.0f);
 
-    // 3. Normal (XYZ in world -> camera space, and normalized)
+    // Normal guide buffer
     Color3f n = safe_normalize(normal_buffer[idx] * inv_s);
     input_normal[idx] = make_float4(n.x, n.y, n.z, 0.0f);
 }
@@ -48,21 +48,10 @@ __global__ void tonemap_and_copy_kernel(
     if (x >= width || y >= height) return;
 
     int idx = y * width + x;
-
     float4 beauty = denoised_beauty[idx];
     Color3f linear_avg(beauty.x, beauty.y, beauty.z);
 
-    // Apply tonemapping
-    Color3f tonemapped = tonemap::apply(linear_avg, tonemapping_mode);
-    
-    // Apply sRGB gamma correction
-    Color3f final_color = toSRGB(tonemapped);
-
-    // Clamp and copy to PBO uchar4
-    pbo_ptr[idx].x = (unsigned char)clamp(final_color.x * 255.f, 0.f, 255.f);
-    pbo_ptr[idx].y = (unsigned char)clamp(final_color.y * 255.f, 0.f, 255.f);
-    pbo_ptr[idx].z = (unsigned char)clamp(final_color.z * 255.f, 0.f, 255.f);
-    pbo_ptr[idx].w = 255;
+    pbo_ptr[idx] = tonemap::pack_to_uchar4(linear_avg, tonemapping_mode);
 }
 
 
@@ -147,15 +136,16 @@ void DenoiserManager::exec(Color3f* d_film_pixels,
                           Color3f* d_normal_buffer, 
                           int sampleCount, 
                           uchar4* d_pbo_ptr, 
-                          int tonemapping_mode) 
+                          int tonemapping_mode,
+                          cudaStream_t stream) 
 {
     if (sampleCount <= 0) return;
 
-    // 1. Prepare denoiser inputs
+    // Prepare denoiser inputs
     dim3 block(16, 16);
     dim3 grid((m_width + block.x - 1) / block.x, (m_height + block.y - 1) / block.y);
 
-    prepare_denoiser_input_kernel<<<grid, block>>>(
+    prepare_denoiser_input_kernel<<<grid, block, 0, stream>>>(
         d_film_pixels,
         d_albedo_buffer,
         d_normal_buffer,
@@ -165,38 +155,22 @@ void DenoiserManager::exec(Color3f* d_film_pixels,
         m_dInputNormal
     );
 
-    // 2. Setup OptiX image layer descriptions
-    OptixImage2D inputBeauty = {};
-    inputBeauty.data = reinterpret_cast<CUdeviceptr>(m_dInputBeauty);
-    inputBeauty.width = m_width;
-    inputBeauty.height = m_height;
-    inputBeauty.rowStrideInBytes = m_width * sizeof(float4);
-    inputBeauty.pixelStrideInBytes = sizeof(float4);
-    inputBeauty.format = OPTIX_PIXEL_FORMAT_FLOAT4;
+    // OptiX image layer descriptions
+    auto makeOptixImage2D = [this](float4* d_ptr) {
+        OptixImage2D img = {};
+        img.data = reinterpret_cast<CUdeviceptr>(d_ptr);
+        img.width = m_width;
+        img.height = m_height;
+        img.rowStrideInBytes = m_width * sizeof(float4);
+        img.pixelStrideInBytes = sizeof(float4);
+        img.format = OPTIX_PIXEL_FORMAT_FLOAT4;
+        return img;
+    };
 
-    OptixImage2D outputBeauty = {};
-    outputBeauty.data = reinterpret_cast<CUdeviceptr>(m_dOutputBeauty);
-    outputBeauty.width = m_width;
-    outputBeauty.height = m_height;
-    outputBeauty.rowStrideInBytes = m_width * sizeof(float4);
-    outputBeauty.pixelStrideInBytes = sizeof(float4);
-    outputBeauty.format = OPTIX_PIXEL_FORMAT_FLOAT4;
-
-    OptixImage2D inputAlbedo = {};
-    inputAlbedo.data = reinterpret_cast<CUdeviceptr>(m_dInputAlbedo);
-    inputAlbedo.width = m_width;
-    inputAlbedo.height = m_height;
-    inputAlbedo.rowStrideInBytes = m_width * sizeof(float4);
-    inputAlbedo.pixelStrideInBytes = sizeof(float4);
-    inputAlbedo.format = OPTIX_PIXEL_FORMAT_FLOAT4;
-
-    OptixImage2D inputNormal = {};
-    inputNormal.data = reinterpret_cast<CUdeviceptr>(m_dInputNormal);
-    inputNormal.width = m_width;
-    inputNormal.height = m_height;
-    inputNormal.rowStrideInBytes = m_width * sizeof(float4);
-    inputNormal.pixelStrideInBytes = sizeof(float4);
-    inputNormal.format = OPTIX_PIXEL_FORMAT_FLOAT4;
+    OptixImage2D inputBeauty  = makeOptixImage2D(m_dInputBeauty);
+    OptixImage2D outputBeauty = makeOptixImage2D(m_dOutputBeauty);
+    OptixImage2D inputAlbedo  = makeOptixImage2D(m_dInputAlbedo);
+    OptixImage2D inputNormal  = makeOptixImage2D(m_dInputNormal);
 
     // Assemble layers
     OptixDenoiserGuideLayer guideLayer = {};
@@ -211,10 +185,10 @@ void DenoiserManager::exec(Color3f* d_film_pixels,
     params.hdrIntensity = m_dIntensity;
     params.blendFactor = 0.0f;
 
-    // Compute average logarithmic intensity (for HDR autoexposure calculation)
+    // Compute average logarithmic intensity
     optixDenoiserComputeIntensity(
         m_denoiser,
-        0, // CUDA stream
+        stream,
         &inputBeauty,
         m_dIntensity,
         m_dScratch,
@@ -224,7 +198,7 @@ void DenoiserManager::exec(Color3f* d_film_pixels,
     // Invoke the OptiX AI Denoiser
     optixDenoiserInvoke(
         m_denoiser,
-        0, // CUDA stream
+        stream,
         &params,
         m_dState, m_stateSize,
         &guideLayer,
@@ -234,8 +208,8 @@ void DenoiserManager::exec(Color3f* d_film_pixels,
         m_dScratch, m_scratchSize
     );
 
-    // 3. Post-process (tonemap, sRGB, copy to display PBO)
-    tonemap_and_copy_kernel<<<grid, block>>>(
+    // Post-process and copy to display PBO
+    tonemap_and_copy_kernel<<<grid, block, 0, stream>>>(
         m_dOutputBeauty,
         m_width, m_height,
         tonemapping_mode,

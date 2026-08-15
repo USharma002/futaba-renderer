@@ -8,7 +8,7 @@ static constexpr float kMinFov = 5.f;
 static constexpr float kMaxFov = 120.f;
 
 CameraController::CameraController()
-    : m_camPos(0.f, 0.f, 2.5f)
+    : m_camPos(0.f, 0.f, 5.f)
     , m_camForward(0.f, 0.f, -1.f)
     , m_camUp(0.f, 1.f, 0.f)
     , m_moveSpeed(2.f)
@@ -72,23 +72,33 @@ bool CameraController::handleScroll(const nanogui::Vector2f &rel) {
     return true;
 }
 
+namespace {
+    constexpr int KeyShift = 340;
+    constexpr int KeyW     = 87;
+    constexpr int KeyS     = 83;
+    constexpr int KeyD     = 68;
+    constexpr int KeyA     = 65;
+    constexpr int KeyE     = 69;
+    constexpr int KeyQ     = 81;
+}
+
 bool CameraController::update(float deltaTime) {
-    float spd = m_moveSpeed * deltaTime;
-    if (m_keys[340] /* GLFW_KEY_LEFT_SHIFT */) spd *= 3.f;
+    float spd = m_moveSpeed * deltaTime * (m_keys[KeyShift] ? 3.f : 1.f);
 
-    Vector3f fwd = m_camForward;
-    Vector3f up = m_camUp;
-    Vector3f right = normalize(cross(fwd, up));
+    Vector3f right = normalize(cross(m_camForward, m_camUp));
+    Vector3f moveDir(0.f);
+    if (m_keys[KeyW]) moveDir += m_camForward;
+    if (m_keys[KeyS]) moveDir -= m_camForward;
+    if (m_keys[KeyD]) moveDir += right;
+    if (m_keys[KeyA]) moveDir -= right;
+    if (m_keys[KeyE]) moveDir += m_camUp;
+    if (m_keys[KeyQ]) moveDir -= m_camUp;
 
-    bool moved = false;
-    if (m_keys[87] /* W */) { m_camPos += fwd * spd; moved = true; }
-    if (m_keys[83] /* S */) { m_camPos += fwd * -spd; moved = true; }
-    if (m_keys[68] /* D */) { m_camPos += right * spd; moved = true; }
-    if (m_keys[65] /* A */) { m_camPos += right * -spd; moved = true; }
-    if (m_keys[69] /* E */) { m_camPos += up * spd; moved = true; }
-    if (m_keys[81] /* Q */) { m_camPos += up * -spd; moved = true; }
-
-    return moved;
+    if (moveDir.lengthSquared() > 0.f) {
+        m_camPos += moveDir * spd;
+        return true;
+    }
+    return false;
 }
 
 void CameraController::setFromConfig(const Point3f& origin, const Point3f& target, const Vector3f& up, float fov, float focusDistance, float apertureRadius) {

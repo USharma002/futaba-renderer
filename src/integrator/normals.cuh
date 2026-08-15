@@ -13,7 +13,7 @@ struct Normals {
     HD Color3f sample(const Ray& ray, const Scene& scene,
                       Sampler& /*sampler*/) const
     {
-        SurfaceIntersection si;
+        SurfaceInteraction si;
         if (!scene.intersect(ray, ray.mint, ray.maxt, si))
             return Color3f(0.f);
 
@@ -23,18 +23,4 @@ struct Normals {
 };
 
 FUTABA_NAMESPACE_END
-
-#if !defined(__CUDACC__) && defined(NANOGUI_GLAD)
-#include "integrator_ui.h"
-
-FUTABA_NAMESPACE_BEGIN
-
-class NormalsIntegratorUI : public IntegratorUI {
-public:
-    std::string getName() const override { return "Normals"; }
-    int getMode() const override { return INTEGRATOR_NORMALS; }
-};
-
-FUTABA_NAMESPACE_END
-#endif
 

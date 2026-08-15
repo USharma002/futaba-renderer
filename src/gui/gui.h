@@ -10,6 +10,7 @@
 #include "texture_manager.h"
 #include "denoiser.h"
 #include "camera_controller.h"
+#include "guiding.h"
 
 FUTABA_NAMESPACE_BEGIN
 class HDRFilm;
@@ -17,7 +18,7 @@ FUTABA_NAMESPACE_END
 
 class FutabaScreen : public nanogui::Screen {
 public:
-    FutabaScreen(int width, int height);
+    FutabaScreen(int width, int height, const std::string& initialScenePath = "");
     virtual ~FutabaScreen() override;
     
     void renderLoop();
@@ -33,6 +34,7 @@ protected:
     bool loadScene(const std::string &xmlPath);
     void recreateRenderTargets(int width, int height);
     void drawGizmo();
+    futaba::LaunchParams populateLaunchParams(uchar4* pboPtr) const;
 
 private:
     int m_renderWidth;
@@ -59,8 +61,11 @@ private:
     bool m_useAntialiasing = true;
     bool m_useNEE = true;
     bool m_useDenoiser = false;
-    
+    bool m_trainRequested = false;
+
     futaba::DenoiserManager m_denoiser;
+    futaba::GuidingManager m_guiding;
+    futaba::TrainingBufferManager m_trainingBuffers;
 
     GLuint m_glTex = 0;
     GLuint m_glPbo = 0;
@@ -79,8 +84,11 @@ private:
 
     futaba::TextureManager m_textureManager;
 
-    // Full-screen loading overlay for background OptiX pipeline compilation
+    // Loading splash overlay for background OptiX pipeline compilation
     nanogui::Window*      m_loadingWindow = nullptr;
     nanogui::ProgressBar* m_loadingProgressBar = nullptr;
     nanogui::Label*       m_loadingStatusLabel = nullptr;
+    nanogui::Label*       m_loadingPercentLabel = nullptr;
+    nanogui::Label*       m_loadingSceneLabel = nullptr;
+    float                 m_smoothProgress = 0.0f;
 };

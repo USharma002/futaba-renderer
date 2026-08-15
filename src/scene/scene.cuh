@@ -76,6 +76,7 @@ struct Scene {
     Material*       materials    = nullptr;
     MeshInstance*   meshes       = nullptr;
     EmitterInstance* emitters     = nullptr;
+    Medium*         media        = nullptr;
 
     float*          emitterTriangleCdf = nullptr;
     int*            emissiveTriangleIndices = nullptr; // maps cdf index -> global triangle index
@@ -89,6 +90,7 @@ struct Scene {
     uint32_t        materialCount = 0;
     uint32_t        meshCount    = 0;
     uint32_t        emitterCount = 0;
+    uint32_t        mediumCount  = 0;
     int             emissiveTriCount = 0;
     float           emitterTriangleFuncSum = 0.f; // sum of weights (area * intensity)
 
@@ -102,7 +104,7 @@ struct Scene {
     // Intersection
     // -----------------------------------------------------------------------
     HD bool intersect(const Ray& ray, float t_min, float t_max,
-                      SurfaceIntersection& rec) const
+                      SurfaceInteraction& rec) const
     {
         bool hit = false;
 
@@ -111,13 +113,28 @@ struct Scene {
         } else {
             float closest = t_max;
             for (uint32_t i = 0; i < triangleCount; ++i) {
-                SurfaceIntersection tmp;
+                SurfaceInteraction tmp;
                 if (triangles[i].intersect(ray, t_min, closest, tmp, use_vertex_normals, (int)i)) {
                     hit     = true;
                     closest = tmp.t;
                     rec     = tmp;
                 }
             }
+        }
+
+        if (hit && materials != nullptr && rec.material_id >= 0 && (uint32_t)rec.material_id < materialCount) {
+#ifdef __CUDA_ARCH__
+            const Material& mat = materials[rec.material_id];
+            if (mat.normalMapTexObj != 0) {
+                float4 nmVal = tex2D<float4>(mat.normalMapTexObj, rec.uv.x, rec.uv.y);
+                Vector3f nLocal((nmVal.x * 2.f - 1.f) * 2.0f, (nmVal.y * 2.f - 1.f) * 2.0f, nmVal.z * 2.f - 1.f);
+                if (dot(nLocal, nLocal) > 0.01f) {
+                    Vector3f nWorld = normalize(rec.frame.to_world(normalize(nLocal)));
+                    rec.n = nWorld;
+                    rec.set_frame_from_normal(nWorld);
+                }
+            }
+#endif
         }
 
         return hit;
@@ -136,7 +153,7 @@ struct Scene {
                     continue;
                 }
             }
-            SurfaceIntersection tmp;
+            SurfaceInteraction tmp;
             if (triangles[i].intersect(ray, t_min, t_max, tmp, false, (int)i))
                 return true;
         }
@@ -155,7 +172,7 @@ struct Scene {
     // -----------------------------------------------------------------------
 
     // Evaluate radiance of a specific emitter at a surface intersection.
-    HD Color3f emitter_eval(int emitterId, const SurfaceIntersection& si) const {
+    HD Color3f emitter_eval(int emitterId, const SurfaceInteraction& si) const {
         if (emitters == nullptr) return Color3f(0.f);
         if (emitterId < 0 || (uint32_t)emitterId >= emitterCount) return Color3f(0.f);
 
@@ -176,7 +193,7 @@ struct Scene {
     // Resolve emitted radiance at an intersection by consulting the mesh's
     // attached emitter. Falls back to the emission baked into the material
     // if no emitter record is available.
-    HD Color3f eval_surface_emission(const SurfaceIntersection& si) const {
+    HD Color3f eval_surface_emission(const SurfaceInteraction& si) const {
         if (materials != nullptr && si.material_id >= 0 && (uint32_t)si.material_id < materialCount) {
             if (meshes != nullptr && si.shape_id >= 0 && (uint32_t)si.shape_id < meshCount) {
                 const int meshEmitterId = meshes[si.shape_id].emitterId;
@@ -247,6 +264,11 @@ struct Scene {
         uploadManaged(emitters, hostEmitters, (size_t)count);
     }
 
+    void setMedia(const Medium* hostMedia, uint32_t count) {
+        mediumCount = count;
+        uploadManaged(media, hostMedia, (size_t)count);
+    }
+
     void setEnvironmentMap(const Color3f* hostPixels, uint32_t width, uint32_t height,
                            const Matrix4f& envToWorld) {
         envMap.setMap(hostPixels, width, height, envToWorld);
@@ -259,19 +281,22 @@ struct Scene {
     void load(const CPUScene& cpuScene) {
         clear();
 
-        // 1. Upload triangles and build BVH
+        // Triangles & BVH
         setTriangles(cpuScene.triangles.data(), (uint32_t)cpuScene.triangles.size());
 
-        // 2. Upload materials
+        // Materials
         setMaterials(cpuScene.materials.data(), (uint32_t)cpuScene.materials.size());
 
-        // 3. Upload meshes
+        // Meshes
         setMeshes(cpuScene.meshes.data(), (uint32_t)cpuScene.meshes.size());
 
-        // 4. Upload emitters
+        // Emitters
         setEmitters(cpuScene.emitters.data(), (uint32_t)cpuScene.emitters.size());
 
-        // 5. Setup environment map
+        // Participating Media
+        setMedia(cpuScene.media.data(), (uint32_t)cpuScene.media.size());
+
+        // Environment Map
         if (cpuScene.envMap.hasEnvMap) {
             setEnvironmentMap(cpuScene.envMap.pixels.data(), 
                               cpuScene.envMap.width, 
@@ -281,15 +306,11 @@ struct Scene {
             setConstantEnvironment(cpuScene.envMap.constantRadiance);
         }
 
-        // 6. Build emissive-triangle distribution
+        // Emissive triangle distribution
         std::vector<int> emissiveTriIndices;
         std::vector<float> emissiveWeights;
         emissiveTriIndices.reserve(cpuScene.triangles.size());
         emissiveWeights.reserve(cpuScene.triangles.size());
-
-        auto getLuminanceColor = [](const Color3f &c) {
-            return c.x * 0.212671f + c.y * 0.715160f + c.z * 0.072169f;
-        };
 
         auto triangleEmission = [&](const Triangle &t) -> Color3f {
             if (t.mesh_id >= 0 && (uint32_t)t.mesh_id < cpuScene.meshes.size()) {
@@ -308,7 +329,7 @@ struct Scene {
             const Triangle &t = cpuScene.triangles[i];
             float area = 0.5f * length(cross(t.p1 - t.p0, t.p2 - t.p0));
             Color3f emission = triangleEmission(t);
-            float w = area * getLuminanceColor(emission);
+            float w = area * getLuminance(emission);
             if (w > 0.f) {
                 emissiveTriIndices.push_back((int)i);
                 emissiveWeights.push_back(w);
@@ -343,6 +364,9 @@ struct Scene {
 
         freeManaged(emitters);
         emitterCount = 0;
+
+        freeManaged(media);
+        mediumCount = 0;
 
         freeManaged(emitterTriangleCdf);
         freeManaged(emissiveTriangleIndices);

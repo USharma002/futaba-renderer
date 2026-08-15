@@ -15,23 +15,16 @@
 FUTABA_NAMESPACE_BEGIN
 
 struct BSDF {
-    // Check if the BSDF is Dirac-delta, or otherwise has no continuous pdf to
-    // MIS against. BSDF_ID_NULL is a deterministic pass-through and must be
-    // treated the same way here - otherwise the *next* real bounce would MIS-
-    // weight an emitter hit against a bogus continuous pdf inherited from the
-    // null interaction.
+    // Check if the BSDF is Dirac-delta (no continuous PDF for MIS)
     HD static bool is_delta(BSDFType type) {
         return type == BSDF_ID_MIRROR || type == BSDF_ID_DIELECTRIC ||
                type == BSDF_ID_THINDIELECTRIC || type == BSDF_ID_NULL;
     }
 
-    // Evaluate the albedo (including texture lookup if applicable)
-    HD static Color3f get_albedo(const Material& mat, const SurfaceIntersection& si) {
-        // Conductors store their surface colour in mat.specular (the specular_reflectance /
-        // Fresnel scale), not in mat.albedo (which is always zero for conductors).
-        if (mat.type == BSDF_ID_ROUGHCONDUCTOR) {
+    // Evaluate material albedo, modulating with diffuse texture if present
+    HD static Color3f get_albedo(const Material& mat, const SurfaceInteraction& si) {
+        if (mat.type == BSDF_ID_ROUGHCONDUCTOR)
             return mat.specular;
-        }
         Color3f albedo = mat.albedo;
 #ifdef __CUDA_ARCH__
         if (mat.texObj != 0) {
@@ -42,127 +35,60 @@ struct BSDF {
         return albedo;
     }
 
-private:
-    // Construct the concrete BSDF object for mat.type and call bsdf.sample(bs, s2).
-    // ThinDielectric and Null are handled before this is called.
-    HD static Color3f dispatch_sample(const Material& mat, const Color3f& albedo,
-                                      BSDFSample& bs, const Point2f& s2) {
-        switch (mat.type) {
-            case BSDF_ID_MICROFACET: {
-                Microfacet bsdf(albedo, mat.alpha, mat.extIOR, mat.intIOR,
-                                mat.isConductor, mat.conductorEta, mat.conductorK, mat.specular);
-                return bsdf.sample(bs, s2);
-            }
-            case BSDF_ID_DIELECTRIC: {
-                Dielectric bsdf(albedo, mat.intIOR);
-                return bsdf.sample(bs, s2);
-            }
-            case BSDF_ID_MIRROR: {
-                Mirror bsdf(albedo);
-                return bsdf.sample(bs, s2);
-            }
-            case BSDF_ID_ROUGHDIELECTRIC: {
-                RoughDielectric bsdf(albedo, mat.alpha, mat.extIOR, mat.intIOR);
-                return bsdf.sample(bs, s2);
-            }
-            case BSDF_ID_ROUGHCONDUCTOR: {
-                RoughConductor bsdf(albedo, mat.alpha, mat.extIOR, mat.conductorEta, mat.conductorK, mat.specular);
-                return bsdf.sample(bs, s2);
-            }
-            case BSDF_ID_ROUGHPLASTIC: {
-                RoughPlastic bsdf(albedo, mat.alpha, mat.extIOR, mat.intIOR);
-                return bsdf.sample(bs, s2);
-            }
-            default: { // BSDF_ID_DIFFUSE
-                Diffuse bsdf(albedo);
-                return bsdf.sample(bs, s2);
-            }
-        }
-    }
-
-    // Construct the concrete BSDF object for mat.type and call bsdf.eval/pdf.
-    // ThinDielectric and Null are handled before this is called.
-    HD static void dispatch_eval_pdf(const Material& mat, const Color3f& albedo,
-                                     const BSDFSample& bs,
-                                     Color3f& f_out, float& pdf_out) {
-        switch (mat.type) {
-            case BSDF_ID_MICROFACET: {
-                Microfacet bsdf(albedo, mat.alpha, mat.extIOR, mat.intIOR,
-                                mat.isConductor, mat.conductorEta, mat.conductorK, mat.specular);
-                f_out   = bsdf.eval(bs);
-                pdf_out = bsdf.pdf(bs);
-                return;
-            }
-            case BSDF_ID_DIELECTRIC: {
-                Dielectric bsdf(albedo, mat.intIOR);
-                f_out   = bsdf.eval(bs);
-                pdf_out = bsdf.pdf(bs);
-                return;
-            }
-            case BSDF_ID_MIRROR: {
-                Mirror bsdf(albedo);
-                f_out   = bsdf.eval(bs);
-                pdf_out = bsdf.pdf(bs);
-                return;
-            }
-            case BSDF_ID_ROUGHDIELECTRIC: {
-                RoughDielectric bsdf(albedo, mat.alpha, mat.extIOR, mat.intIOR);
-                f_out   = bsdf.eval(bs);
-                pdf_out = bsdf.pdf(bs);
-                return;
-            }
-            case BSDF_ID_ROUGHCONDUCTOR: {
-                RoughConductor bsdf(albedo, mat.alpha, mat.extIOR, mat.conductorEta, mat.conductorK, mat.specular);
-                f_out   = bsdf.eval(bs);
-                pdf_out = bsdf.pdf(bs);
-                return;
-            }
-            case BSDF_ID_ROUGHPLASTIC: {
-                RoughPlastic bsdf(albedo, mat.alpha, mat.extIOR, mat.intIOR);
-                f_out   = bsdf.eval(bs);
-                pdf_out = bsdf.pdf(bs);
-                return;
-            }
-            default: { // BSDF_ID_DIFFUSE
-                Diffuse bsdf(albedo);
-                f_out   = bsdf.eval(bs);
-                pdf_out = bsdf.pdf(bs);
-                return;
-            }
-        }
-    }
-
-public:
-    // Sample the BSDF
-    HD static Color3f sample(const Material& mat, const SurfaceIntersection& si,
-                             BSDFSample& bs, const Point2f& s2) {
-        bs.wi         = si.to_local(si.wi);
-        bs.front_face = si.front_face;
-
-        const Color3f albedo = get_albedo(mat, si);
-
-        // Passthrough types that don't share the standard eval/pdf interface
-        if (mat.type == BSDF_ID_THINDIELECTRIC) {
-            ThinDielectric bsdf(albedo, mat.intIOR);
-            return bsdf.sample(bs, s2);
-        }
+    // Sample the BSDF in local shading coordinates
+    HD static Color3f sample(const Material& mat, const SurfaceInteraction& si,
+                             BSDFSample& bs, const Point2f& u) 
+    {
         if (mat.type == BSDF_ID_NULL) {
-            bs.wo           = -bs.wi;
+            bs.wo           = -si.to_local(si.wi);
             bs.sampled_type = BSDF_ID_NULL;
             bs.pdf          = 1.0f;
             bs.eta          = 1.0f;
-            return Color3f(1.0f);
+            bs.weight       = Color3f(1.0f);
+            return bs.weight;
         }
 
-        return dispatch_sample(mat, albedo, bs, s2);
+        bs.wi         = si.to_local(si.wi);
+        bs.front_face = si.front_face;
+        const Color3f albedo = get_albedo(mat, si);
+
+        switch (mat.type) {
+            case BSDF_ID_MIRROR:          return Mirror(albedo).sample(bs, u);
+            case BSDF_ID_DIELECTRIC:      return Dielectric(albedo, mat.intIOR, mat.extIOR).sample(bs, u);
+            case BSDF_ID_THINDIELECTRIC:  return ThinDielectric(albedo, mat.intIOR, mat.extIOR).sample(bs, u);
+            case BSDF_ID_MICROFACET:      return Microfacet(albedo, mat.alpha, mat.extIOR, mat.intIOR, mat.isConductor, mat.conductorEta, mat.conductorK, mat.specular).sample(bs, u);
+            case BSDF_ID_ROUGHDIELECTRIC: return RoughDielectric(albedo, mat.alpha, mat.extIOR, mat.intIOR).sample(bs, u);
+            case BSDF_ID_ROUGHCONDUCTOR:  return RoughConductor(albedo, mat.alpha, mat.extIOR, mat.conductorEta, mat.conductorK, mat.specular).sample(bs, u);
+            case BSDF_ID_ROUGHPLASTIC:    return RoughPlastic(albedo, mat.alpha, mat.extIOR, mat.intIOR).sample(bs, u);
+            case BSDF_ID_DIFFUSE:
+            default:                      return Diffuse(albedo).sample(bs, u);
+        }
     }
 
-    // Evaluate BSDF and its PDF
-    HD static void eval_pdf(const Material& mat, const SurfaceIntersection& si,
+    // Evaluate BSDF f(wo, wi)
+    HD static Color3f eval(const Material& mat, const SurfaceInteraction& si,
+                           const Vector3f& wo_local) 
+    {
+        Color3f f; float p;
+        eval_pdf(mat, si, wo_local, f, p);
+        return f;
+    }
+
+    // Evaluate PDF p(wo | wi)
+    HD static float pdf(const Material& mat, const SurfaceInteraction& si,
+                        const Vector3f& wo_local) 
+    {
+        Color3f f; float p;
+        eval_pdf(mat, si, wo_local, f, p);
+        return p;
+    }
+
+    // Simultaneously evaluate BSDF f(wo, wi) and its PDF p(wo | wi)
+    HD static void eval_pdf(const Material& mat, const SurfaceInteraction& si,
                             const Vector3f& wo_local,
-                            Color3f& f_out, float& pdf_out) {
-        // Delta/passthrough types have no continuous eval or pdf
-        if (mat.type == BSDF_ID_THINDIELECTRIC || mat.type == BSDF_ID_NULL) {
+                            Color3f& f_out, float& pdf_out) 
+    {
+        if (is_delta(mat.type)) {
             f_out   = Color3f(0.f);
             pdf_out = 0.f;
             return;
@@ -172,10 +98,16 @@ public:
         bs.wi         = si.to_local(si.wi);
         bs.front_face = si.front_face;
         bs.wo         = wo_local;
-
         const Color3f albedo = get_albedo(mat, si);
 
-        dispatch_eval_pdf(mat, albedo, bs, f_out, pdf_out);
+        switch (mat.type) {
+            case BSDF_ID_MICROFACET:      return Microfacet(albedo, mat.alpha, mat.extIOR, mat.intIOR, mat.isConductor, mat.conductorEta, mat.conductorK, mat.specular).eval_pdf(bs, f_out, pdf_out);
+            case BSDF_ID_ROUGHDIELECTRIC: return RoughDielectric(albedo, mat.alpha, mat.extIOR, mat.intIOR).eval_pdf(bs, f_out, pdf_out);
+            case BSDF_ID_ROUGHCONDUCTOR:  return RoughConductor(albedo, mat.alpha, mat.extIOR, mat.conductorEta, mat.conductorK, mat.specular).eval_pdf(bs, f_out, pdf_out);
+            case BSDF_ID_ROUGHPLASTIC:    return RoughPlastic(albedo, mat.alpha, mat.extIOR, mat.intIOR).eval_pdf(bs, f_out, pdf_out);
+            case BSDF_ID_DIFFUSE:
+            default:                      return Diffuse(albedo).eval_pdf(bs, f_out, pdf_out);
+        }
     }
 };
 

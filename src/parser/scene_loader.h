@@ -10,6 +10,7 @@
 #include "bbox.cuh"
 #include "emitter.cuh"
 #include "mesh.cuh"
+#include "medium.cuh"
 
 FUTABA_NAMESPACE_BEGIN
 
@@ -36,12 +37,15 @@ struct EnvMapSettings {
 
 // Result of a successful scene load (staging buffers for GPU allocation).
 struct CPUScene {
-    std::vector<Triangle>       triangles;
-    std::vector<Material>       materials;
-    std::vector<std::string>    materialTexturePaths; // Same size as CPUScene::materials
-    std::vector<EmitterInstance> emitters;
-    std::vector<MeshInstance>   meshes;
-    std::vector<std::string>    meshNames;            // CPU-only names, parallel to meshes
+    std::vector<Triangle>        triangles;
+    std::vector<Material>        materials;
+    std::vector<std::string>     materialTexturePaths; // Same size as CPUScene::materials
+    std::vector<std::string>     materialNormalMapPaths; // Same size as CPUScene::materials
+    std::vector<EmitterInstance>  emitters;
+    std::vector<MeshInstance>    meshes;
+    std::vector<std::string>     meshNames;            // CPU-only names, parallel to meshes
+    std::vector<Medium>          media;
+    std::vector<std::string>     mediumNames;
 
     CameraSettings  camera;
     EnvMapSettings  envMap;

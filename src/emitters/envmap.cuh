@@ -28,6 +28,20 @@ struct EnvironmentMapEmitter {
         return hasConstant || (hasMap && pixels != nullptr && width > 0 && height > 0);
     }
 
+    HD Point2f dirToUV(const Vector3f& dirWorld, Vector3f* outD = nullptr) const {
+        const Vector3f d = normalize(Vector3f(
+            toWorld.m[0][0] * dirWorld.x + toWorld.m[1][0] * dirWorld.y + toWorld.m[2][0] * dirWorld.z,
+            toWorld.m[0][1] * dirWorld.x + toWorld.m[1][1] * dirWorld.y + toWorld.m[2][1] * dirWorld.z,
+            toWorld.m[0][2] * dirWorld.x + toWorld.m[1][2] * dirWorld.y + toWorld.m[2][2] * dirWorld.z
+        ));
+        if (outD) *outD = d;
+        const float phi = atan2f(d.x, -d.z);
+        float u = phi * INV_TWOPI;
+        if (u < 0.f) u += 1.f;
+        const float v = acosf(clamp(d.y, -1.f, 1.f)) * INV_PI;
+        return Point2f(u, v);
+    }
+
     // Evaluate the environment map in the given world direction.
     HD Color3f eval(const Vector3f& dirWorld) const {
         if (hasConstant)
@@ -36,20 +50,9 @@ struct EnvironmentMapEmitter {
         if (!hasMap || pixels == nullptr || width == 0 || height == 0)
             return Color3f(0.f);
 
-        // Convert world direction to environment map UV coordinates
-        const Vector3f d = normalize(Vector3f(
-            toWorld.m[0][0] * dirWorld.x + toWorld.m[1][0] * dirWorld.y + toWorld.m[2][0] * dirWorld.z,
-            toWorld.m[0][1] * dirWorld.x + toWorld.m[1][1] * dirWorld.y + toWorld.m[2][1] * dirWorld.z,
-            toWorld.m[0][2] * dirWorld.x + toWorld.m[1][2] * dirWorld.y + toWorld.m[2][2] * dirWorld.z
-        ));
-
-        const float phi = atan2f(d.x, -d.z);
-        float u = phi * INV_TWOPI;
-        if (u < 0.f) u += 1.f;
-        const float v = acosf(clamp(d.y, -1.f, 1.f)) * INV_PI;
-
-        const float x = u * (float)width  - 0.5f;
-        const float y = v * (float)height - 0.5f;
+        const Point2f uv = dirToUV(dirWorld);
+        const float x = uv.x * (float)width  - 0.5f;
+        const float y = uv.y * (float)height - 0.5f;
 
         const int x0 = (int)floorf(x);
         const int y0 = (int)floorf(y);
@@ -89,7 +92,7 @@ struct EnvironmentMapEmitter {
             return Vector3f(0.f);
         }
 
-        // 1. Sample row (v coordinate) using marginal CDF
+        // Marginal row sampling (v coordinate)
         int v = findIntervalDevice(marginalCdf, height, sample.y);
         float cdf_v0 = marginalCdf[v];
         float cdf_v1 = marginalCdf[v + 1];
@@ -97,7 +100,7 @@ struct EnvironmentMapEmitter {
         if (cdf_v1 - cdf_v0 <= 0.f) dv = 0.f;
         float continuous_v = (v + dv) / height;
 
-        // 2. Sample column (u coordinate) using row conditional CDF
+        // Conditional column sampling (u coordinate)
         const float* rowCdf = condCdfs + (size_t)v * (width + 1);
         int u = findIntervalDevice(rowCdf, width, sample.x);
         float cdf_u0 = rowCdf[u];
@@ -106,17 +109,17 @@ struct EnvironmentMapEmitter {
         if (cdf_u1 - cdf_u0 <= 0.f) du = 0.f;
         float continuous_u = (u + du) / width;
 
-        // 3. Map normalized coordinates (u, v) to spherical angles (theta, phi)
+        // Map normalized (u, v) to spherical coordinates
         float theta = continuous_v * M_PI;
         float phi = continuous_u * 2.f * M_PI;
 
-        float sinTheta = sinf(theta);
-        float cosTheta = cosf(theta);
+        float sinTheta, cosTheta, sinPhi, cosPhi;
+        Warp::fast_sincos(theta, &sinTheta, &cosTheta);
+        Warp::fast_sincos(phi, &sinPhi, &cosPhi);
 
-        // Convert to local direction (consistent with eval uv coordinate mapping)
-        Vector3f dLocal(sinTheta * sinf(phi), cosTheta, -sinTheta * cosf(phi));
+        // Convert to local direction
+        Vector3f dLocal(sinTheta * sinPhi, cosTheta, -sinTheta * cosPhi);
 
-        // 4. Transform local direction to world space
         return normalize(toWorld * dLocal);
     }
 
@@ -129,20 +132,11 @@ struct EnvironmentMapEmitter {
             return 0.f;
         }
 
-        // Convert world direction to local environment space
-        const Vector3f d = normalize(Vector3f(
-            toWorld.m[0][0] * dirWorld.x + toWorld.m[1][0] * dirWorld.y + toWorld.m[2][0] * dirWorld.z,
-            toWorld.m[0][1] * dirWorld.x + toWorld.m[1][1] * dirWorld.y + toWorld.m[2][1] * dirWorld.z,
-            toWorld.m[0][2] * dirWorld.x + toWorld.m[1][2] * dirWorld.y + toWorld.m[2][2] * dirWorld.z
-        ));
+        Vector3f d;
+        const Point2f uv = dirToUV(dirWorld, &d);
 
-        const float phi = atan2f(d.x, -d.z);
-        float u = phi * INV_TWOPI;
-        if (u < 0.f) u += 1.f;
-        const float v = acosf(clamp(d.y, -1.f, 1.f)) * INV_PI;
-
-        const int x = clamp((int)(u * width), 0, (int)width - 1);
-        const int y = clamp((int)(v * height), 0, (int)height - 1);
+        const int x = clamp((int)(uv.x * width), 0, (int)width - 1);
+        const int y = clamp((int)(uv.y * height), 0, (int)height - 1);
 
         const Color3f color = pixels[y * width + x];
         const float lum = getLuminance(color);
@@ -181,7 +175,7 @@ struct EnvironmentMapEmitter {
                                      width * height * sizeof(Color3f),
                                      cudaMemcpyHostToDevice));
 
-        // 1. Build weights on host
+        // Build luminance weights on host
         std::vector<float> weights(width * height);
         for (uint32_t y = 0; y < height; ++y) {
             float sinTheta = sinf(M_PI * (y + 0.5f) / height);
@@ -190,18 +184,17 @@ struct EnvironmentMapEmitter {
             }
         }
 
-        // 2. Construct 2D distribution on host
+        // Construct 2D piecewise constant distribution
         Distribution2D dist;
         dist.build(weights, width, height);
         marginalSum = dist.marginal.funcSum;
 
-        // 3. Flatten conditional CDFs for copying
+        // Flatten conditional CDFs and copy to device
         std::vector<float> condCdfsHost(height * (width + 1));
         for (uint32_t y = 0; y < height; ++y) {
             std::memcpy(&condCdfsHost[y * (width + 1)], dist.cond[y].cdf.data(), (width + 1) * sizeof(float));
         }
 
-        // 4. Allocate and copy CDF arrays to GPU
         CUDA_CHECK(cudaMalloc(&condCdfs, condCdfsHost.size() * sizeof(float)));
         CUDA_CHECK(cudaMemcpy(condCdfs, condCdfsHost.data(),
                                      condCdfsHost.size() * sizeof(float),

@@ -16,7 +16,7 @@ public:
     TextureManager(const TextureManager&) = delete;
     TextureManager& operator=(const TextureManager&) = delete;
 
-    cudaTextureObject_t createTexture(const std::string& filename);
+    cudaTextureObject_t createTexture(const std::string& filename, bool isSRGB = true);
     void clear();
 
     const std::vector<cudaArray*>& getArrays() const { return m_cudaTextureArrays; }

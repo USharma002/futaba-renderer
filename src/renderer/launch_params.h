@@ -4,6 +4,9 @@
 #include "perspective.cuh"
 #include "scene.cuh"
 #include "emitter_sample.cuh"
+#include "bbox.cuh"
+#include "ppg/stree.h"
+#include "guiding_params.h"
 
 FUTABA_NAMESPACE_BEGIN
 
@@ -14,7 +17,8 @@ enum IntegratorMode {
     INTEGRATOR_ALBEDO = 3,
     INTEGRATOR_PHONG = 4,
     INTEGRATOR_PRIMITIVES = 5,
-    INTEGRATOR_HEATMAP = 6
+    INTEGRATOR_HEATMAP = 6,
+    INTEGRATOR_VOLPATH = 7
 };
 
 enum LightSamplerType {
@@ -40,9 +44,9 @@ struct PhongParams {
 // Denoiser guide buffers: filled by PathRecorder during the path integrator's
 // first bounce, consumed by the OptiX denoiser after the frame is rendered.
 struct DenoiseParams {
-    bool     active = false;
     Color3f* albedo_buffer = nullptr;
     Color3f* normal_buffer = nullptr;
+    bool     active = false;
 };
 
 struct LightSamplerData {
@@ -55,6 +59,10 @@ struct LaunchParams {
     Color3f* film_pixels;
     Scene scene;
     PerspectiveCamera camera;
+    GuidingParams guiding;
+    LightSamplerData light_sampler;
+    DenoiseParams denoise;
+    PhongParams phong;
     int width;
     int height;
     int sampleCount;
@@ -62,10 +70,7 @@ struct LaunchParams {
     int rr_depth;
     int integrator_mode;
     int tonemapping_mode;
-    LightSamplerData light_sampler;
     bool use_antialiasing;
-    PhongParams phong;
-    DenoiseParams denoise;
 };
 
 FUTABA_NAMESPACE_END

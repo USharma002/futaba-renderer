@@ -5,7 +5,7 @@
 
 FUTABA_NAMESPACE_BEGIN
 
-cudaTextureObject_t TextureManager::createTexture(const std::string& filename) {
+cudaTextureObject_t TextureManager::createTexture(const std::string& filename, bool isSRGB) {
     int width = 0, height = 0, channels = 0;
     stbi_set_flip_vertically_on_load(true);
     unsigned char* data = stbi_load(filename.c_str(), &width, &height, &channels, 4); // load as RGBA
@@ -46,7 +46,7 @@ cudaTextureObject_t TextureManager::createTexture(const std::string& filename) {
     texDesc.filterMode = cudaFilterModeLinear;
     texDesc.readMode = cudaReadModeNormalizedFloat;
     texDesc.normalizedCoords = 1;
-    texDesc.sRGB = 1; // Convert sRGB texture data to linear space on read
+    texDesc.sRGB = isSRGB ? 1 : 0;
 
     cudaTextureObject_t texObj = 0;
     err = cudaCreateTextureObject(&texObj, &resDesc, &texDesc, NULL);

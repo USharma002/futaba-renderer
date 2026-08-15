@@ -44,19 +44,16 @@ void buildCornellBox(Scene &scene) {
   CPUScene loaded;
 
   // Materials
-  loaded.materials.push_back(
-      Material(Color3f(0.886f, 0.699f, 0.666f), Color3f(0.f))); // 0 white
-  loaded.materials.push_back(
-      Material(Color3f(0.105f, 0.378f, 0.076f), Color3f(0.f))); // 1 green
-  loaded.materials.push_back(
-      Material(Color3f(0.570f, 0.043f, 0.044f), Color3f(0.f))); // 2 red
-  loaded.materials.push_back(Material(Color3f(0.886f, 0.699f, 0.666f),
-                               Color3f(18.4f, 14.f, 6.8f))); // 3 light
+  loaded.materials = {
+      Material(Color3f(0.886f, 0.699f, 0.666f), Color3f(0.f)), // 0 white
+      Material(Color3f(0.105f, 0.378f, 0.076f), Color3f(0.f)), // 1 green
+      Material(Color3f(0.570f, 0.043f, 0.044f), Color3f(0.f)), // 2 red
+      Material(Color3f(0.886f, 0.699f, 0.666f), Color3f(18.4f, 14.f, 6.8f)) // 3 light
+  };
   loaded.materialTexturePaths.resize(4);
 
   // Each surface gets its own mesh_id so it maps to its MeshInstanceGPU.
-  //   mesh 0 = floor, mesh 1 = ceiling, mesh 2 = back wall,
-  //   mesh 3 = left wall, mesh 4 = right wall, mesh 5 = light
+  // 0 = floor, 1 = ceiling, 2 = back wall, 3 = left wall, 4 = right wall, 5 = light
   addRectangle(loaded.triangles, Point3f(-1.f, -1.f, -1.f), Point3f(1.f, -1.f, -1.f),
                Point3f(1.f, -1.f, 1.f), Point3f(-1.f, -1.f, 1.f), 0, 0);
   addRectangle(loaded.triangles, Point3f(-1.f, 1.f, 1.f), Point3f(1.f, 1.f, 1.f),
@@ -67,7 +64,7 @@ void buildCornellBox(Scene &scene) {
                Point3f(-1.f, 1.f, -1.f), Point3f(-1.f, -1.f, -1.f), 1, 3);
   addRectangle(loaded.triangles, Point3f(1.f, -1.f, -1.f), Point3f(1.f, 1.f, -1.f),
                Point3f(1.f, 1.f, 1.f), Point3f(1.f, -1.f, 1.f), 2, 4);
-  // Area light
+
   const float ls = 0.23f, lh = 0.99f;
   addRectangle(loaded.triangles, Point3f(-ls, lh, -0.19f), Point3f(ls, lh, -0.19f),
                Point3f(ls, lh, 0.19f), Point3f(-ls, lh, 0.19f), 3, 5);
@@ -108,8 +105,6 @@ FUTABA_NAMESPACE_END
 void launch_render(HDRFilm *film,
                    DenoiserManager* denoiser,
                    LaunchParams params) {
-  g_pipeline.init();
-
   film->sampleCount++;
 
   params.film_pixels = film->d_pixels;
@@ -128,13 +123,9 @@ void launch_render(HDRFilm *film,
   cudaMemcpyAsync(g_pipeline.d_params.get(), &params,
                   sizeof(LaunchParams), cudaMemcpyHostToDevice, g_pipeline.renderStream);
 
-  int raygen_idx = 0; // default to render/preview
-  if (params.integrator_mode == INTEGRATOR_PATH) {
-      raygen_idx = 1;
-  }
-  g_pipeline.sbt.raygenRecord = reinterpret_cast<CUdeviceptr>(
-      g_pipeline.d_raygenRecordsBase.get() + raygen_idx * sizeof(EmptyRecord)
-  );
+  g_pipeline.sbt.raygenRecord = (params.integrator_mode == INTEGRATOR_PATH || params.integrator_mode == INTEGRATOR_VOLPATH)
+      ? g_pipeline.raygenRecordPath
+      : g_pipeline.raygenRecordRender;
 
   // Launch OptiX on the render stream
   optixLaunch(g_pipeline.pipeline,
@@ -149,7 +140,8 @@ void launch_render(HDRFilm *film,
         denoiser->getNormalBuffer(),
         film->sampleCount,
         params.pbo_ptr,
-        params.tonemapping_mode
+        params.tonemapping_mode,
+        g_pipeline.renderStream
     );
   }
 

@@ -2,10 +2,11 @@
 #include <iostream>
 #include "gui.h"
 
-int main() {
+int main(int argc, char** argv) {
     setvbuf(stdout, NULL, _IONBF, 0);
     setvbuf(stderr, NULL, _IONBF, 0);
     std::cout << "Debug: Main started" << std::endl;
+    std::string scenePath = (argc > 1) ? argv[1] : "";
     try {
         nanogui::init();
         std::cout << "Debug: Nanogui initialized successfully" << std::endl;
@@ -13,7 +14,7 @@ int main() {
         {
             std::cout << "Debug: Creating FutabaScreen..." << std::endl;
             // Create our custom screen
-            FutabaScreen screen(800, 600);
+            FutabaScreen screen(800, 600, scenePath);
             std::cout << "Debug: FutabaScreen created successfully" << std::endl;
             
             // Enter the continuous real-time render loop

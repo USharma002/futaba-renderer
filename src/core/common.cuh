@@ -35,6 +35,12 @@ constexpr float Infinity = std::numeric_limits<float>::infinity();
 #define INV_SQRT_TWO 0.70710678118654752440f
 #endif
 
+constexpr float Pi         = 3.14159265358979323846f;
+constexpr float TwoPi      = 6.28318530717958647692f;
+constexpr float InvPi      = 0.31830988618379067154f;
+constexpr float Inv2Pi     = 0.15915494309189533577f;
+constexpr float Inv4Pi     = 0.07957747154594766788f;
+
 #define Epsilon 1e-4f
 
 
@@ -116,7 +122,7 @@ HD float length(const Vector3f& v) {
 // OPTICS
 // -----------------------------------------------------------------------------
 
-// Calculate unpolarized fresnel reflection coefficient
+// Calculate unpolarized fresnel reflection coefficient for dielectrics
 HD float fresnel(float cosThetaI, float extIOR, float intIOR) {
     float etaI = extIOR, etaT = intIOR;
 
@@ -141,6 +147,55 @@ HD float fresnel(float cosThetaI, float extIOR, float intIOR) {
     float rp = (etaT * cosThetaI - etaI * cosThetaT) / (etaT * cosThetaI + etaI * cosThetaT);
 
     return (rs * rs + rp * rp) * 0.5f;
+}
+
+// Conductor Fresnel for a single spectral channel (Born & Wolf / PBRT)
+HD float fresnelConductorChannel(float cosThetaI, float eta, float k) {
+    const float cosI = fmaxf(cosThetaI, 0.f);
+    const float cos2 = cosI * cosI;
+    const float sin2 = fmaxf(0.f, 1.f - cos2);
+
+    const float eta2 = eta * eta;
+    const float k2   = k * k;
+
+    const float t0 = eta2 - k2 - sin2;
+    const float a2pb2 = sqrtf(t0 * t0 + 4.f * eta2 * k2);
+    const float a = sqrtf(fmaxf(0.f, 0.5f * (a2pb2 + t0)));
+
+    const float t1 = a2pb2 + cos2;
+    const float t2 = 2.f * cosI * a;
+    const float Rs = (t1 - t2) / fmaxf(t1 + t2, 1e-8f);
+
+    const float t3 = cos2 * a2pb2 + sin2 * sin2;
+    const float t4 = t2 * sin2;
+    const float Rp = Rs * (t3 - t4) / fmaxf(t3 + t4, 1e-8f);
+
+    return clamp(0.5f * (Rs + Rp), 0.f, 1.f);
+}
+
+// Spectral Conductor Fresnel with external IOR scaling
+HD Color3f fresnelConductor(float cosThetaI, const Color3f& eta, const Color3f& k, float extIOR, const Color3f& specularScale = Color3f(1.f)) {
+    if (eta.x == 0.f && eta.y == 0.f && eta.z == 0.f) {
+        return specularScale;
+    }
+    const float etaScale = fmaxf(extIOR, 1e-6f);
+    const Color3f relEta = eta / etaScale;
+    const Color3f relK   = k   / etaScale;
+    return Color3f(
+        fresnelConductorChannel(cosThetaI, relEta.x, relK.x),
+        fresnelConductorChannel(cosThetaI, relEta.y, relK.y),
+        fresnelConductorChannel(cosThetaI, relEta.z, relK.z)
+    ) * specularScale;
+}
+
+// Average internal diffuse reflectance for dielectric coating over diffuse substrate
+HD float fresnelDiffuseReflectance(float eta) {
+    if (eta < 1.0f) {
+        // From inside to outside when eta < 1
+        return -0.4399f + (0.7099f / eta) - (0.3319f / (eta * eta)) + (0.0636f / (eta * eta * eta));
+    } else {
+        return -1.4399f / (eta * eta) + (0.7099f / eta) + 0.6681f + 0.0636f * eta;
+    }
 }
 
 FUTABA_NAMESPACE_END

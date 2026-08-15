@@ -7,18 +7,7 @@
 FUTABA_NAMESPACE_BEGIN
 
 struct Triangle {    
-    // Material and shape IDs for intersection record
-    int material_id;          // Material ID (4 bytes)
-    int mesh_id = -1;         // Mesh ID (4 bytes)
-    
-    bool has_normals = false; // Whether the triangle has vertex normals
-    bool has_uvs = false;     // Whether the triangle has vertex UV coordinates
-    
-    Point2f uv0 = Point2f(0.f); // UV coordinates for vertex 0
-    Point2f uv1 = Point2f(0.f); // UV coordinates for vertex 1
-    Point2f uv2 = Point2f(0.f); // UV coordinates for vertex 2
-    
-    // Triangle vertices and normals in world space
+    // Triangle vertices and normals in world space (72 bytes)
     Point3f p0;
     Point3f p1;
     Point3f p2;
@@ -27,7 +16,21 @@ struct Triangle {
     Vector3f n1;
     Vector3f n2;
 
-    HD bool intersect(const Ray& r, float t_min, float t_max, SurfaceIntersection& rec, bool use_vertex_normals, int primitive_id = -1) const {
+    // UV coordinates (24 bytes)
+    Point2f uv0 = Point2f(0.f);
+    Point2f uv1 = Point2f(0.f);
+    Point2f uv2 = Point2f(0.f);
+
+    // Material and shape IDs (8 bytes)
+    int material_id = 0;
+    int mesh_id = -1;
+    
+    // Flags (4 bytes aligned)
+    bool has_normals = false;
+    bool has_uvs = false;
+    uint8_t _pad[2] = {0, 0};
+
+    HD bool intersect(const Ray& r, float t_min, float t_max, SurfaceInteraction& rec, bool use_vertex_normals, int primitive_id = -1) const {
         Vector3f edge1 = p1 - p0;
         Vector3f edge2 = p2 - p0;
         Vector3f pvec = cross(r.d, edge2);
@@ -46,34 +49,19 @@ struct Triangle {
         return true;
     }
 
-    HD void populate_intersection(const Ray& r, float t, float u, float v, SurfaceIntersection& rec, bool use_vertex_normals, int primitive_id = -1) const {
+    HD void populate_intersection(const Ray& r, float t, float u, float v, SurfaceInteraction& rec, bool use_vertex_normals, int primitive_id = -1) const {
         rec.t = t;
-        rec.p = r(rec.t);
-        Vector3f edge1 = p1 - p0;
-        Vector3f edge2 = p2 - p0;
-        Vector3f face_n = normalize(cross(edge1, edge2));
-        if (has_normals && use_vertex_normals) {
-            float w = 1.0f - u - v;
-            rec.n = normalize(n0 * w + n1 * u + n2 * v);
-        } else {
-            rec.n = face_n;
-        }
+        rec.p = r(t);
+        const float w = 1.0f - u - v;
+        const Vector3f face_n = normalize(cross(p1 - p0, p2 - p0));
+        rec.n = (has_normals && use_vertex_normals) ? normalize(n0 * w + n1 * u + n2 * v) : face_n;
         rec.wi = -r.d;
         rec.shape_id = mesh_id;
         rec.material_id = material_id;
         rec.primitive_id = primitive_id;
         rec.front_face = dot(r.d, face_n) < 0.0f;
-        if (has_uvs) {
-            float w = 1.0f - u - v;
-            rec.uv = Point2f(
-                uv0.x * w + uv1.x * u + uv2.x * v,
-                uv0.y * w + uv1.y * u + uv2.y * v
-            );
-        } else {
-            rec.uv = Point2f(u, v);
-        }
-        Vector3f frame_n = rec.front_face ? rec.n : -rec.n;
-        rec.set_frame_from_normal(frame_n);
+        rec.uv = has_uvs ? (uv0 * w + uv1 * u + uv2 * v) : Point2f(u, v);
+        rec.set_frame_from_normal(rec.front_face ? rec.n : -rec.n);
     }
 
     HD Point3f sampleSurface(const Point2f& s) const {
@@ -90,9 +78,7 @@ struct Triangle {
     }
 
     HD Point3f centroid() const {
-        return Point3f((p0.x + p1.x + p2.x) / 3.0f,
-                       (p0.y + p1.y + p2.y) / 3.0f,
-                       (p0.z + p1.z + p2.z) / 3.0f);
+        return (p0 + p1 + p2) * (1.0f / 3.0f);
     }
 };
 

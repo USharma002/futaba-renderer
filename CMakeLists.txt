@@ -6,6 +6,7 @@ project(app LANGUAGES CXX CUDA)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CUDA_STANDARD 17)
+set(CMAKE_CUDA_ARCHITECTURES 86 CACHE STRING "CUDA architectures" FORCE)
 
 # Find the CUDA Toolkit
 find_package(CUDAToolkit REQUIRED)
@@ -35,6 +36,9 @@ add_executable(app
     # Emitters & Shapes
     src/shapes/shape_factory.cpp
 
+    # Guiding
+    src/guiding/guiding.cpp
+
     # Renderer
     src/renderer/renderer_host.cpp
     src/renderer/texture_manager.cpp
@@ -46,15 +50,12 @@ add_executable(app
     src/gui/camera_controller.cpp
 )
 
-
-
 find_path(OPTIX_INCLUDE_DIR optix.h
     HINTS
     "C:/ProgramData/NVIDIA Corporation/OptiX SDK 9.0.0/include"
 )
 if(OPTIX_INCLUDE_DIR)
     target_include_directories(app PRIVATE ${OPTIX_INCLUDE_DIR})
-
 endif()
 
 # Force GLAD macro for Windows OpenGL
@@ -62,6 +63,7 @@ target_compile_definitions(app PRIVATE NANOGUI_GLAD)
 
 set(APP_INCLUDES
     ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_CURRENT_SOURCE_DIR}/src/accel
     ${CMAKE_CURRENT_SOURCE_DIR}/src/core
     ${CMAKE_CURRENT_SOURCE_DIR}/src/films
@@ -77,7 +79,11 @@ set(APP_INCLUDES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/bsdfs
     ${CMAKE_CURRENT_SOURCE_DIR}/src/emitters
     ${CMAKE_CURRENT_SOURCE_DIR}/src/materials
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/medium
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/phase
     ${CMAKE_CURRENT_SOURCE_DIR}/src/denoiser
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/guiding
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/guiding/ppg
     ${CMAKE_CURRENT_SOURCE_DIR}/ext/nanogui/include
     ${CMAKE_CURRENT_SOURCE_DIR}/ext/pugixml/src
     ${CMAKE_CURRENT_SOURCE_DIR}/ext/tinyexr
@@ -115,7 +121,7 @@ add_custom_command(
             -o "${PTX_FILE}"
     DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/renderer/renderer_device.cu"
             "${CMAKE_CURRENT_SOURCE_DIR}/src/renderer/launch_params.h"
-            "${CMAKE_CURRENT_SOURCE_DIR}/src/emitters/emitter.cuh"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/scene/emitter.cuh"
             "${CMAKE_CURRENT_SOURCE_DIR}/src/emitters/emitter_sample.cuh"
             "${CMAKE_CURRENT_SOURCE_DIR}/src/emitters/emitter_sampler.cuh"
             "${CMAKE_CURRENT_SOURCE_DIR}/src/emitters/area.cuh"
@@ -123,6 +129,12 @@ add_custom_command(
             "${CMAKE_CURRENT_SOURCE_DIR}/src/scene/mesh.cuh"
             "${CMAKE_CURRENT_SOURCE_DIR}/src/integrator/heatmap.cuh"
             "${CMAKE_CURRENT_SOURCE_DIR}/src/integrator/path.cuh"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/integrator/volpath.cuh"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/medium/medium.cuh"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/phase/phase.cuh"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/phase/phase_sample.cuh"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/phase/hg.cuh"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/phase/isotropic.cuh"
             "${CMAKE_CURRENT_SOURCE_DIR}/src/accel/bvh.cuh"
             "${CMAKE_CURRENT_SOURCE_DIR}/src/scene/scene.cuh"
             "${CMAKE_CURRENT_SOURCE_DIR}/src/bsdfs/bsdf.cuh"
@@ -135,6 +147,10 @@ add_custom_command(
             "${CMAKE_CURRENT_SOURCE_DIR}/src/bsdfs/roughdielectric.cuh"
             "${CMAKE_CURRENT_SOURCE_DIR}/src/bsdfs/roughplastic.cuh"
             "${CMAKE_CURRENT_SOURCE_DIR}/src/bsdfs/thindielectric.cuh"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/guiding/guiding_device.cuh"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/guiding/guiding_params.h"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/guiding/ppg/dtree.cuh"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/guiding/ppg/stree.h"
 )
 add_custom_target(compile_ptx DEPENDS "${PTX_FILE}")
 add_dependencies(app compile_ptx)
@@ -145,9 +161,8 @@ target_compile_definitions(app PRIVATE "PTX_FILE_PATH=\"${PTX_FILE_FORWARD_SLASH
 string(REPLACE "\\" "/" FUTABA_SOURCE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_definitions(app PRIVATE FUTABA_SOURCE_ROOT="${FUTABA_SOURCE_ROOT}")
 
-# 4. Link NanoGUI AND the CUDA runtime
+# Link NanoGUI AND CUDA runtime
 target_link_libraries(app PRIVATE 
     nanogui 
     CUDA::cudart
 )
-
