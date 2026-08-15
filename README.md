@@ -158,8 +158,17 @@ cmake ..
 cmake --build . --config Release
 ```
 
-## References
+## References & Credits
 
+### 3D Models & Test Scenes
+- **Ford Mustang GT3**: Model created by [vecarz.com](https://sketchfab.com/3d-models/ford-mustang-gt3-wwwvecarzcom-061487e4e4fa4cd1bf7e15eae2e238ba) on Sketchfab (CC Attribution).
+- **Stanford 3D Scanning Repository**: [Stanford Computer Graphics Laboratory](https://graphics.stanford.edu/data/3Dscanrep/) (Stanford Dragon, Stanford Bunny).
+- **Rendering Resources & Scenes**: [Benedikt Bitterli's Rendering Resources](https://benedikt-bitterli.me/resources/) (Cornell Box, Glass of Water, Spaceship, Teapot, etc.).
+- **Veach MIS**: Eric Veach (1997), [*Robust Monte Carlo Methods for Light Transport Simulation*](https://graphics.stanford.edu/papers/veach_thesis/).
+- **The Cornell Box**: [Cornell University Program of Computer Graphics](https://www.graphics.cornell.edu/online/box/).
+- **Utah Teapot**: Martin Newell (1975).
+
+### Literature & Frameworks
 - Müller et al., [*Practical Path Guiding for Efficient Light-Transport Simulation*](https://tom94.net/pages/publications/mueller17practical-erratum), EGSR 2017
 - Pharr, Jakob, Humphreys --- *Physically Based Rendering: From Theory to Implementation* (PBRT)
 - [Mitsuba Renderer](https://www.mitsuba-renderer.org/) --- scene format reference
