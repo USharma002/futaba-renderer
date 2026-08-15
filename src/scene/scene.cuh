@@ -123,18 +123,10 @@ struct Scene {
         }
 
         if (hit && materials != nullptr && rec.material_id >= 0 && (uint32_t)rec.material_id < materialCount) {
-#ifdef __CUDA_ARCH__
             const Material& mat = materials[rec.material_id];
-            if (mat.normalMapTexObj != 0) {
-                float4 nmVal = tex2D<float4>(mat.normalMapTexObj, rec.uv.x, rec.uv.y);
-                Vector3f nLocal((nmVal.x * 2.f - 1.f) * 2.0f, (nmVal.y * 2.f - 1.f) * 2.0f, nmVal.z * 2.f - 1.f);
-                if (dot(nLocal, nLocal) > 0.01f) {
-                    Vector3f nWorld = normalize(rec.frame.to_world(normalize(nLocal)));
-                    rec.n = nWorld;
-                    rec.set_frame_from_normal(nWorld);
-                }
+            if (rec.primitive_id >= 0 && (uint32_t)rec.primitive_id < triangleCount) {
+                triangles[rec.primitive_id].apply_normal_map(mat, rec);
             }
-#endif
         }
 
         return hit;

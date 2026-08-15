@@ -167,8 +167,10 @@ extern "C" __global__ void __closesthit__ch() {
                      optixGetWorldRayDirection().z));
 
   float2 bary = optixGetTriangleBarycentrics();
+  const Material* mat = (tri.material_id >= 0 && (uint32_t)tri.material_id < params.scene.materialCount)
+      ? &params.scene.materials[tri.material_id] : nullptr;
   tri.populate_intersection(ray, optixGetRayTmax(), bary.x, bary.y, *rec,
-                            params.scene.use_vertex_normals, (int)primIdx);
+                            params.scene.use_vertex_normals, (int)primIdx, mat);
 }
 
 extern "C" __global__ void __miss__ms() {

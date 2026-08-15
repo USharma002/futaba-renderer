@@ -247,6 +247,7 @@ static bool flattenBsdfNode(const pugi::xml_node& bsdfNode,
 
     const std::string type = bsdfNode.attribute("type").value();
     if (type == "twosided" || type == "bumpmap" || type == "mask" || type == "normalmap") {
+        parseProperties(bsdfNode, bsdfProps, defaults);
         const pugi::xml_node inner = bsdfNode.child("bsdf");
         if (!inner) {
             warnings.push_back("Found <bsdf type='" + type + "'> without nested <bsdf>; using diffuse fallback.");
@@ -277,11 +278,12 @@ static void extractMaterialTextures(const PropertyList& bsdfProps,
             if (const auto* s = std::get_if<std::string>(&propVal)) {
                 std::string valLower = *s;
                 for (auto& c : valLower) c = std::tolower(c);
-                if (propName.find("texture") != std::string::npos ||
-                    valLower.find(".png") != std::string::npos ||
-                    valLower.find(".jpg") != std::string::npos ||
-                    valLower.find(".tga") != std::string::npos ||
-                    valLower.find(".bmp") != std::string::npos) {
+                if (propName.find("normal") == std::string::npos && propName.find("bump") == std::string::npos &&
+                    (propName.find("texture") != std::string::npos ||
+                     valLower.find(".png") != std::string::npos ||
+                     valLower.find(".jpg") != std::string::npos ||
+                     valLower.find(".tga") != std::string::npos ||
+                     valLower.find(".bmp") != std::string::npos)) {
                     texPath = *s;
                     break;
                 }
@@ -290,13 +292,18 @@ static void extractMaterialTextures(const PropertyList& bsdfProps,
     }
 
     if (bsdfProps.hasProperty("normalmap_texture")) nmPath = bsdfProps.getString("normalmap_texture");
+    else if (bsdfProps.hasProperty("bumpmap_texture")) nmPath = bsdfProps.getString("bumpmap_texture");
     else if (bsdfProps.hasProperty("normal_texture")) nmPath = bsdfProps.getString("normal_texture");
-    else nmPath = bsdfProps.getString("normalmap", bsdfProps.getString("normal", ""));
+    else if (bsdfProps.hasProperty("bump_texture")) nmPath = bsdfProps.getString("bump_texture");
+    else if (bsdfProps.hasProperty("normalmap")) nmPath = bsdfProps.getString("normalmap");
+    else if (bsdfProps.hasProperty("bumpmap")) nmPath = bsdfProps.getString("bumpmap");
+    else if (bsdfProps.hasProperty("normal")) nmPath = bsdfProps.getString("normal");
+    else if (bsdfProps.hasProperty("bump")) nmPath = bsdfProps.getString("bump");
 
     if (nmPath.empty()) {
         for (const auto& [propName, propVal] : bsdfProps.getProperties()) {
             if (const auto* s = std::get_if<std::string>(&propVal)) {
-                if (propName.find("normal") != std::string::npos && *s != texPath) {
+                if ((propName.find("normal") != std::string::npos || propName.find("bump") != std::string::npos) && *s != texPath) {
                     nmPath = *s;
                     break;
                 }

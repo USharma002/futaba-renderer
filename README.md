@@ -81,7 +81,7 @@ Futaba is a high-performance, learning-oriented physically-based renderer writte
 - [ ] Bidirectional path tracing
 - [ ] Photon mapping
 - [ ] Disney principled BSDF
-- [ ] Bump / normal mapping
+- [x] Bump / normal mapping
 - [ ] Spectral rendering
 
 ---
