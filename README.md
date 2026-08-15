@@ -57,6 +57,11 @@ Futaba is a high-performance, learning-oriented physically-based renderer writte
     ![Surface Normals](assets/dragon-cbox-normals.png)
   - [x] **Heatmap**: AABB intersection complexity visualization.
     ![Intersection Heatmap](assets/dragon-cbox-heatmap.png)
+- [x] **Materials & Textures**:
+  - Full BSDF suite: Diffuse, Dielectric, Thin Dielectric, Rough Conductor, Rough Dielectric, Rough Plastic (Beckmann microfacet model).
+  - Image textures with sRGB-to-linear conversion.
+  - Tangent-space **Normal Mapping** & **Bump Mapping** with per-triangle UV derivative frame derivation.
+- [x] **Path Guiding**: Practical Path Guiding (PPG) using adaptive spatial-directional quadtrees (SD-trees).
 - [x] **Films**: 32-bit HDR accumulation with zero-copy OpenGL PBO display and EXR export support.
 - [x] **Denoising**: Optional OptiX AI denoiser with albedo/normal guide buffers and tonemapped output.
 
@@ -77,11 +82,11 @@ Futaba is a high-performance, learning-oriented physically-based renderer writte
 - [x] Image textures on materials
 - [x] Rough conductor / dielectric / plastic BSDFs (Beckmann microfacet)
 - [x] OptiX AI denoising with guide buffers
-- [ ] Path Guiding (PPG)
+- [x] Path Guiding (PPG with SD-trees)
+- [x] Bump / normal mapping
 - [ ] Bidirectional path tracing
 - [ ] Photon mapping
 - [ ] Disney principled BSDF
-- [x] Bump / normal mapping
 - [ ] Spectral rendering
 
 ---
